@@ -1,0 +1,20 @@
+# Klucze i sekrety
+*.jks
+*.keystore
+keystore.base64.txt
+secrets.properties
+local.properties
+.env
+
+# Gradle / build
+.gradle/
+build/
+app/build/
+
+# Android Studio
+.idea/
+*.iml
+.DS_Store
+
+# Logi
+*.log
