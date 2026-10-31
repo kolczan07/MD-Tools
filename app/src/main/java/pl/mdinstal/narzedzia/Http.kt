@@ -9,7 +9,7 @@ object Http {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
-        c.setRequestProperty("User-Agent", "MD-Tools/3.0")
+        c.setRequestProperty("User-Agent", "MD-Tools/3.1")
         try {
             if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
             return c.inputStream.bufferedReader().use { it.readText() }

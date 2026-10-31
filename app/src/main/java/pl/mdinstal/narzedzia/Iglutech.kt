@@ -1,6 +1,9 @@
 package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -99,6 +102,14 @@ fun IglutechScreen(onBack: () -> Unit) {
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
+                        settings.javaScriptCanOpenWindowsAutomatically = true
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        // Część portali traktuje przeglądarkę osadzoną ("; wv") inaczej niż zwykłą.
+                        settings.userAgentString = settings.userAgentString.replace("; wv", "")
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        // Bez WebChromeClient nie działają okna confirm/alert i część skryptów stron.
+                        webChromeClient = WebChromeClient()
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
                                 val cr = creds ?: return
