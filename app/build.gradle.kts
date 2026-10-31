@@ -1,15 +1,12 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Dane podpisu pochodzą wyłącznie z GitHub Secrets (zmienne środowiskowe). W repo nie ma haseł ani keystore.
-val ksFile = rootProject.file("release.jks")
-val ksPassword = System.getenv("KEYSTORE_PASSWORD").orEmpty()
-val ksAlias = System.getenv("KEY_ALIAS").orEmpty()
-val ksKeyPassword = System.getenv("KEY_PASSWORD").orEmpty()
-val hasSigning = ksFile.exists() && ksPassword.isNotEmpty() && ksAlias.isNotEmpty() && ksKeyPassword.isNotEmpty()
+// Wartości z -P (GitHub Actions) lub domyślne (lokalnie / Android Studio)
+val propVersionName: String = (project.findProperty("versionName") as String?) ?: "2.6"
+val propVersionCode: Int = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 15
+val propUpdateRepo: String = (project.findProperty("updateRepo") as String?) ?: "kolczan07/MD-INSTAL-Native"
 
 android {
     namespace = "pl.mdinstal.narzedzia"
@@ -19,34 +16,27 @@ android {
         applicationId = "pl.mdinstal.narzedzia"
         minSdk = 24
         targetSdk = 34
-        versionCode = 19
-        versionName = "3.3"
+        versionCode = propVersionCode
+        versionName = propVersionName
+
+        // Wstrzyknięte do BuildConfig — updater ich użyje
+        buildConfigField("String", "UPDATE_REPO", "\"$propUpdateRepo\"")
     }
 
     signingConfigs {
-        if (hasSigning) {
-            create("release") {
-                storeFile = ksFile
-                storePassword = ksPassword
-                keyAlias = ksAlias
-                keyPassword = ksKeyPassword
-            }
+        create("release") {
+            // Lokalnie: release.jks w root projektu. W CI: ścieżka z env KEYSTORE_FILE
+            storeFile = file(System.getenv("KEYSTORE_FILE") ?: "${rootDir}/release.jks")
+            storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
+            keyAlias = System.getenv("KEY_ALIAS") ?: "mdinstal"
+            keyPassword = System.getenv("KEY_PASSWORD") ?: ""
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (hasSigning) signingConfig = signingConfigs.getByName("release")
-        }
-    }
-
-    applicationVariants.all {
-        outputs.all {
-            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            val vName = versionName ?: "1.0"
-            val vCode = versionCode.toString()
-            output.outputFileName = "MD-Tools-${vName}-${vCode}.apk"
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -56,29 +46,44 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true   // ← potrzebne dla BuildConfig.UPDATE_REPO
+    }
+    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
 
-    packaging {
-        resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val vName = versionName ?: "1.0"
+            val vCode = versionCode.toString()
+            output.outputFileName = "MD-INSTAL-${vName}-${vCode}.apk"
+        }
     }
 }
 
 dependencies {
+    implementation("androidx.webkit:webkit:1.11.0")
+    implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.fragment:fragment-ktx:1.6.2")
+
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-core")
-
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.fragment:fragment-ktx:1.6.2")
-    implementation("androidx.biometric:biometric:1.1.0")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.0")
 
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-session:1.4.1")
+    // Media3 (radio w tle — masz już RadioService)
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-session:1.3.1")
+
+    // Updater — HTTP + JSON
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.json:json:20240303")
 }
