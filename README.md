@@ -10,11 +10,11 @@ aktualizuje starą bez odinstalowywania.
 3. Wgraj zawartość tej paczki na wierzch.
 4. Push na `main` uruchamia build (GitHub Actions → Artifacts → MD-INSTAL-apk).
 
-## Klucz podpisu
-Aktualizacje w aplikacji: Ustawienia → Sprawdź aktualizacje (oraz automatycznie przy starcie, co 6 h).
-Źródło: GitHub Releases repo kolczan07/MD-INSTAL (musi być publiczne). Workflow tworzy wydanie `v<versionName>`
-z plikiem APK. Aby wypuścić update: podbij `versionName` i `versionCode` w app/build.gradle.kts i zrób push.
+## Klucz podpisu (GitHub Secrets)
+W repo nie ma keystore ani haseł. Dodaj w Settings → Secrets and variables → Actions:
+- `KEYSTORE_B64`: `release.jks` zakodowany w base64 (Linux: `base64 -w0 release.jks`,
+  PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks")) | Set-Clipboard`)
+- `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
 
-Hasła czytane są z sekretów `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`
-(opcjonalnie `KEYSTORE_B64` = `base64 -w0 release.jks`). Gdy sekretów brak, użyte są dotychczasowe
-wartości z `app/build.gradle.kts`. Po ustawieniu sekretów usuń wartości zapasowe z tego pliku.
+Musi to być ten sam keystore co w starej aplikacji, inaczej Android nie potraktuje APK jako aktualizacji.
+Workflow zatrzyma się z czytelnym błędem, jeśli któregoś sekretu brakuje.

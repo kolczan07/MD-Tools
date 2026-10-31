@@ -4,9 +4,12 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Wartość z env (GitHub Secrets), a gdy jej brak: dotychczasowa z repozytorium.
-fun secret(name: String, fallback: String): String =
-    System.getenv(name)?.takeIf { it.isNotEmpty() } ?: fallback
+// Dane podpisu pochodzą wyłącznie z GitHub Secrets (zmienne środowiskowe). W repo nie ma haseł ani keystore.
+val ksFile = rootProject.file("release.jks")
+val ksPassword = System.getenv("KEYSTORE_PASSWORD").orEmpty()
+val ksAlias = System.getenv("KEY_ALIAS").orEmpty()
+val ksKeyPassword = System.getenv("KEY_PASSWORD").orEmpty()
+val hasSigning = ksFile.exists() && ksPassword.isNotEmpty() && ksAlias.isNotEmpty() && ksKeyPassword.isNotEmpty()
 
 android {
     namespace = "pl.mdinstal.narzedzia"
@@ -21,18 +24,20 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            storeFile = rootProject.file("release.jks")
-            storePassword = secret("KEYSTORE_PASSWORD", "mdinstal2026")
-            keyAlias = secret("KEY_ALIAS", "mdinstal")
-            keyPassword = secret("KEY_PASSWORD", "mdinstal2026")
+        if (hasSigning) {
+            create("release") {
+                storeFile = ksFile
+                storePassword = ksPassword
+                keyAlias = ksAlias
+                keyPassword = ksKeyPassword
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (hasSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 
