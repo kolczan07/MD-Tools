@@ -36,11 +36,9 @@ import java.net.URL
 
 data class UpdateInfo(val version: String, val url: String, val notes: String, val size: Long)
 
-/** Aktualizacje z GitHub Releases (repo publiczne — nazwa z -PupdateRepo). */
+/** Aktualizacje z GitHub Releases (repo publiczne — na sztywno kolczan07/MD-Tools). */
 object Updater {
-    /** Bierze repo z BuildConfig (wstrzyknięte przez -PupdateRepo), fallback na sztywne. */
-    private val REPO: String
-        get() = BuildConfig.UPDATE_REPO.ifBlank { "kolczan07/MD-INSTAL-Native" }
+    private const val REPO = "kolczan07/MD-Tools"
 
     /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
     fun latest(): UpdateInfo? {
@@ -49,13 +47,14 @@ object Updater {
         val assets = json.optJSONArray("assets") ?: return null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name").endsWith(".apk")) {
+            if (a.optString("name").endsWith(".apk", ignoreCase = true)) {
                 return UpdateInfo(tag, a.getString("browser_download_url"), json.optString("body"), a.optLong("size"))
             }
         }
         return null
     }
 
+    /** Porównuje wersje semantycznie: "3.3" vs "3.2" → true. */
     fun isNewer(remote: String, local: String): Boolean {
         fun parts(v: String) = v.split('.', '-').map { it.filter { c -> c.isDigit() }.toIntOrNull() ?: 0 }
         val r = parts(remote)
@@ -70,7 +69,7 @@ object Updater {
 
     fun download(ctx: Context, info: UpdateInfo, onProgress: (Int) -> Unit): File {
         val dir = File(ctx.cacheDir, "updates").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-        val f = File(dir, "MD-INSTAL-${info.version}.apk")
+        val f = File(dir, "update.apk")
         val c = URL(info.url).openConnection() as HttpURLConnection
         c.connectTimeout = 15000
         c.readTimeout = 30000
@@ -110,13 +109,19 @@ object Updater {
         )
     }
 
-    fun install(ctx: Context, apk: File) {
+    /** Zwraca false, gdy trzeba najpierw zezwolić na instalację z tej aplikacji. */
+    fun install(ctx: Context, apk: File): Boolean {
+        if (!canInstall(ctx)) {
+            openInstallPermission(ctx)
+            return false
+        }
         val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", apk)
         ctx.startActivity(
             Intent(Intent.ACTION_VIEW)
                 .setDataAndType(uri, "application/vnd.android.package-archive")
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
         )
+        return true
     }
 }
 
@@ -154,8 +159,11 @@ fun UpdateDialog(info: UpdateInfo, onClose: () -> Unit) {
                     scope.launch {
                         try {
                             val f = withContext(Dispatchers.IO) { Updater.download(ctx, info) { p -> progress = p } }
-                            Updater.install(ctx, f)
-                            onClose()
+                            if (Updater.install(ctx, f)) onClose()
+                            else {
+                                progress = -1
+                                message = "Zezwól na instalację i kliknij ponownie."
+                            }
                         } catch (e: Exception) {
                             progress = -1
                             message = "Nie udało się pobrać aktualizacji."
