@@ -104,8 +104,6 @@ fun IglutechScreen(onBack: () -> Unit) {
                         settings.allowContentAccess = false
                         settings.javaScriptCanOpenWindowsAutomatically = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                        // Część portali traktuje przeglądarkę osadzoną ("; wv") inaczej niż zwykłą.
-                        settings.userAgentString = settings.userAgentString.replace("; wv", "")
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         // Bez WebChromeClient nie działają okna confirm/alert i część skryptów stron.
