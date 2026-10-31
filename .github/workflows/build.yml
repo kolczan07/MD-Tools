@@ -50,7 +50,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MD-INSTAL-apk
+          name: MD-Tools-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
@@ -64,5 +64,5 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APK" --clobber
           else
-            gh release create "$TAG" "$APK" --title "MD-INSTAL $VER" --notes "Wersja $VER" --target "$GITHUB_SHA"
+            gh release create "$TAG" "$APK" --title "MD-Tools $VER" --notes "Wersja $VER" --target "$GITHUB_SHA"
           fi
