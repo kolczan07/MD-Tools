@@ -1,7 +1,7 @@
 package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
-import android.view.ViewTreeObserver
+import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -27,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 
 private const val IGLU_URL = "https://service.iglutech.eu"
@@ -106,69 +108,47 @@ fun IglutechScreen(onBack: () -> Unit) {
                     WebView(c).apply {
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
-                        settings.allowFileAccess = true
-                        settings.allowContentAccess = true
-                        
-                        // --- PRÓBA WYŁĄCZENIA CORS ---
-                        @Suppress("DEPRECATION")
-                        settings.allowUniversalAccessFromFileURLs = true
-                        @Suppress("DEPRECATION")
-                        settings.allowFileAccessFromFileURLs = true
-                        
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
                         settings.javaScriptCanOpenWindowsAutomatically = true
-                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+
+                        // WebView dokleja do każdego żądania nagłówek X-Requested-With z ID aplikacji.
+                        // Serwery i WAF potrafią przez niego odrzucać zapytania do API, a Chrome go nie wysyła.
+                        // Pusta lista = nagłówek nie jest wysyłany do żadnego originu.
+                        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
+                            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(settings, emptySet())
+                        }
 
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
 
                         webChromeClient = object : WebChromeClient() {
                             override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
-                                android.util.Log.d(TAG, "${msg.message()} @ ${msg.sourceId()}:${msg.lineNumber()}")
+                                Log.d(TAG, "${msg.message()} @ ${msg.sourceId()}:${msg.lineNumber()}")
                                 return true
                             }
                         }
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
-                                android.util.Log.d(TAG, "onPageFinished: $url")
                                 val cr = creds ?: return
                                 if (url != null && url.startsWith(IGLU_URL)) {
                                     view.evaluateJavascript(autofillJs(cr.first, cr.second, cr.third), null)
                                 }
                             }
 
-                            override fun onReceivedError(
-                                view: WebView,
-                                request: WebResourceRequest,
-                                error: WebResourceError
-                            ) {
-                                android.util.Log.e(TAG, "onReceivedError: ${error.description} for ${request.url}")
+                            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                                Log.e(TAG, "onReceivedError: ${error.description} for ${request.url}")
                             }
 
-                            override fun onReceivedHttpError(
-                                view: WebView,
-                                request: WebResourceRequest,
-                                errorResponse: WebResourceResponse
-                            ) {
-                                android.util.Log.e(TAG, "HTTP ${errorResponse.statusCode} for ${request.url}")
+                            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                                Log.e(TAG, "HTTP ${errorResponse.statusCode} for ${request.url}")
                             }
                         }
 
                         web = this
-
-                        viewTreeObserver.addOnGlobalLayoutListener(
-                            object : ViewTreeObserver.OnGlobalLayoutListener {
-                                override fun onGlobalLayout() {
-                                    if (width > 0 && height > 0) {
-                                        viewTreeObserver.removeOnGlobalLayoutListener(this)
-                                        if (url == null) {
-                                            android.util.Log.d(TAG, "Ładuję $IGLU_URL (rozmiar: ${width}x${height})")
-                                            loadUrl(IGLU_URL)
-                                        }
-                                    }
-                                }
-                            }
-                        )
+                        loadUrl(IGLU_URL)
                     }
                 },
                 onRelease = { it.destroy() }
