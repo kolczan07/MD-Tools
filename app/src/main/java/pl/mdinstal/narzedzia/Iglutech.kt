@@ -7,6 +7,7 @@ import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -27,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
@@ -109,8 +111,6 @@ fun IglutechScreen(onBack: () -> Unit) {
                         settings.allowContentAccess = false
                         settings.javaScriptCanOpenWindowsAutomatically = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                        // Celowo NIE modyfikujemy userAgentString — domyślny UA WebView,
-                        // taki sam jak w działającej starej wersji (MainActivity).
 
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -142,17 +142,49 @@ fun IglutechScreen(onBack: () -> Unit) {
                             override fun onReceivedHttpError(
                                 view: WebView,
                                 request: WebResourceRequest,
-                                errorResponse: android.webkit.WebResourceResponse
+                                errorResponse: WebResourceResponse
                             ) {
                                 android.util.Log.e(TAG, "HTTP ${errorResponse.statusCode} for ${request.url}")
                             }
+
+                            // --- FIX CORS: Przechwytujemy zapytania do API i doklejamy nagłówki ---
+                            override fun shouldInterceptRequest(
+                                view: WebView,
+                                request: WebResourceRequest
+                            ): WebResourceResponse? {
+                                val url = request.url.toString()
+                                if (url.contains("api.iglutech.eu")) {
+                                    try {
+                                        // Tworzymy nowe zapytanie z wymuszonymi nagłówkami
+                                        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                                        conn.requestMethod = request.method
+                                        
+                                        // Kopiujemy oryginalne nagłówki
+                                        request.requestHeaders.forEach { (key, value) ->
+                                            conn.setRequestProperty(key, value)
+                                        }
+                                        
+                                        // WSTRZYKUJEMY POPRAWNE NAGŁÓWKI CORS
+                                        conn.setRequestProperty("Origin", "https://service.iglutech.eu")
+                                        conn.setRequestProperty("Referer", "https://service.iglutech.eu/")
+                                        
+                                        val responseCode = conn.responseCode
+                                        val contentType = conn.contentType?.split(";")?.get(0) ?: "application/json"
+                                        val inputStream = if (responseCode in 200..299) conn.inputStream else conn.errorStream
+                                        
+                                        // Zwracamy spreparowaną odpowiedź do WebView
+                                        return WebResourceResponse(contentType, "UTF-8", responseCode, conn.responseMessage ?: "OK", conn.headerFields.mapValues { it.value.joinToString(",") }, inputStream)
+                                    } catch (e: Exception) {
+                                        android.util.Log.e(TAG, "Intercept error: ${e.message}")
+                                    }
+                                }
+                                return super.shouldInterceptRequest(view, request)
+                            }
                         }
 
-                        // NIE ładujemy tutaj — czekamy na niezerowe wymiary (patrz niżej).
+                        // NIE ładujemy tutaj — czekamy na niezerowe wymiary.
                         web = this
 
-                        // Ładuj dopiero, gdy WebView ma szerokość i wysokość > 0.
-                        // Bez tego Chromium potrafi policzyć viewport jako 0 i nie wyrenderować treści.
                         viewTreeObserver.addOnGlobalLayoutListener(
                             object : ViewTreeObserver.OnGlobalLayoutListener {
                                 override fun onGlobalLayout() {
