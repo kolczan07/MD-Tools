@@ -59,18 +59,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -x
-          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts) || VER=""
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          echo "APK=[$APK]"
+          VER=$(aapt dump badging "$APK" | grep -oP "versionName='\K[^']+")
           echo "VER=[$VER]"
           if [ -z "$VER" ]; then
-            echo "::error::Nie udało się odczytać versionName z app/build.gradle.kts"
+            echo "::error::Nie udało się odczytać versionName z APK"
             exit 1
           fi
           TAG="v$VER"
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
-          echo "TAG=[$TAG] APK=[$APK]"
-          
-          # Spróbuj utworzyć Release (jeśli istnieje, błąd jest ignorowany)
+          echo "TAG=[$TAG]"
           gh release create "$TAG" "$APK" --title "MD-Tools $VER" --notes "Wersja $VER" || true
-          
-          # Upewnij się, że APK jest wgrany (nadpisz, jeśli już był)
           gh release upload "$TAG" "$APK" --clobber
