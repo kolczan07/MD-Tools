@@ -46,7 +46,7 @@ android {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
             val vName = versionName ?: "1.0"
             val vCode = versionCode.toString()
-            output.outputFileName = "MD-INSTAL-${vName}-${vCode}.apk"
+            output.outputFileName = "MD-Tools-${vName}-${vCode}.apk"
         }
     }
 

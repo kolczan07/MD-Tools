@@ -62,7 +62,7 @@ fun HomeScreen(onOpen: (Screen) -> Unit) {
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
-                Text("MD-INSTAL", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = cs.onBackground)
+                Text("MD-Tools", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = cs.onBackground)
                 Text("Panel techniczny", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = cs.onBackground)
                 Text("Narzędzia i serwis", fontSize = 14.sp, color = cs.onSurfaceVariant)
             }
@@ -84,7 +84,7 @@ fun HomeScreen(onOpen: (Screen) -> Unit) {
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("MD-INSTAL", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = cs.onBackground)
+            Text("MD-Tools", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = cs.onBackground)
             Box(Modifier.padding(horizontal = 8.dp).width(40.dp).height(2.dp).background(cs.primary))
             Text("TECH", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = cs.primary, letterSpacing = 2.sp)
         }

@@ -115,7 +115,7 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("MD-INSTAL", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold)
+                Text("MD-Tools", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold)
                 Text(
                     "PANEL TECHNICZNY",
                     color = Color(0xFF94A3B8),

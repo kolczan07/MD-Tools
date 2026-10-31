@@ -101,7 +101,7 @@ fun AboutScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     AppScaffold("O aplikacji", onBack) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
-            Text("MD-INSTAL Narzędzia", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+            Text("MD-Tools", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Text(
                 "Wersja: ${appVersion(ctx)}",
                 modifier = Modifier.padding(top = 12.dp),

@@ -38,7 +38,7 @@ data class UpdateInfo(val version: String, val url: String, val notes: String, v
 
 /** Aktualizacje z GitHub Releases (repo musi być publiczne). */
 object Updater {
-    const val REPO = "kolczan07/MD-INSTAL"
+    const val REPO = "kolczan07/MD-Tools"
 
     /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
     fun latest(): UpdateInfo? {
@@ -68,7 +68,7 @@ object Updater {
 
     fun download(ctx: Context, info: UpdateInfo, onProgress: (Int) -> Unit): File {
         val dir = File(ctx.cacheDir, "updates").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-        val f = File(dir, "MD-INSTAL-${info.version}.apk")
+        val f = File(dir, "MD-Tools-${info.version}.apk")
         val c = URL(info.url).openConnection() as HttpURLConnection
         c.connectTimeout = 15000
         c.readTimeout = 30000

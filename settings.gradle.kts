@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "MD-INSTAL"
+rootProject.name = "MD-Tools"
 include(":app")

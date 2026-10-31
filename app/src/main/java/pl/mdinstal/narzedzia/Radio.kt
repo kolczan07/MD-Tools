@@ -199,7 +199,7 @@ fun RadioScreen(onBack: () -> Unit) {
         c.setMediaItem(
             MediaItem.Builder()
                 .setUri(s.url)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-INSTAL Radio").build())
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-Tools Radio").build())
                 .build()
         )
         c.prepare()
