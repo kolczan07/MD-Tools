@@ -8,3 +8,7 @@
 /captures/
 .externalNativeBuild/
 .cxx/
+
+# klucz podpisu: tylko w GitHub Secrets, nigdy w repo
+*.jks
+*.keystore
