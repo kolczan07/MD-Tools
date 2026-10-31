@@ -11,7 +11,17 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.wifi.ScanResult
 import android.net.wifi.WifiManager
+import android.util.Log
+import android.view.ViewGroup
+import android.webkit.ConsoleMessage
+import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -78,22 +88,37 @@ fun SpeedtestScreen(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize().padding(pad),
             factory = { c ->
                 WebView(c).apply {
+                    layoutParams = ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.allowFileAccess = false
-                    
-                    // --- POPRAWKI DLA ZBYT MAŁEGO EKRANU ---
-                    // 1. Włączamy obsługę gestów (pinch-to-zoom)
-                    settings.setSupportZoom(true)
-                    settings.builtInZoomControls = true
-                    settings.displayZoomControls = false // Ukrywa brzydkie przyciski +/- 
-                    
-                    // 2. Wymuszamy tryb responsywny i dopasowanie do ekranu
-                    settings.useWideViewPort = true
-                    settings.loadWithOverviewMode = true
-                    settings.textZoom = 100
-                    
+                    settings.allowContentAccess = false
+                    settings.javaScriptCanOpenWindowsAutomatically = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
                     setBackgroundColor(android.graphics.Color.WHITE)
+
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                            Log.d("SpeedWV", "${msg.message()} @ ${msg.sourceId()}:${msg.lineNumber()}")
+                            return true
+                        }
+                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                            Log.e("SpeedWV", "onReceivedError: ${error.description} for ${request.url}")
+                        }
+
+                        override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                            Log.e("SpeedWV", "HTTP ${errorResponse.statusCode} for ${request.url}")
+                        }
+                    }
                     loadUrl("https://md-instal.fireprobe.net")
                 }
             },
