@@ -35,7 +35,6 @@ jobs:
           gradle assembleRelease --no-daemon
           -PversionName=${GITHUB_REF_NAME#v}
           -PversionCode=${{ github.run_number }}
-          -PupdateRepo=${{ github.repository }}
 
       - name: Name the APK
         run: |
