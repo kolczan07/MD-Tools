@@ -2,6 +2,7 @@ package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
 import android.util.Log
+import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -27,12 +28,55 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
-import androidx.webkit.WebSettingsCompat
-import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
+
+/**
+ * Bezpiecznik: jeśli w tym WebView jednostki vh dają 0, przelicza je w stylach strony na piksele.
+ * Gdy vh działa normalnie, skrypt nic nie robi.
+ */
+private const val FIX_VH_JS = """
+(function(){
+  if (window.__vhFix) return; window.__vhFix = true;
+  var props=['height','min-height','max-height','top','bottom','margin-top','margin-bottom','padding-top','padding-bottom'];
+  var re=/(-?\d*\.?\d+)(d|s|l)?vh\b/g;
+  function broken(){
+    var t=document.createElement('div');
+    t.style.cssText='position:fixed;height:100vh;width:1px;visibility:hidden';
+    document.body.appendChild(t);
+    var z=t.offsetHeight===0;
+    t.remove();
+    return z;
+  }
+  function conv(v){var H=window.innerHeight;return v.replace(re,function(m,n){return (parseFloat(n)*H/100)+'px';});}
+  function proc(r){
+    if(r.cssRules){for(var i=0;i<r.cssRules.length;i++)proc(r.cssRules[i]);}
+    if(r.style){
+      props.forEach(function(p){
+        var v=r.style.getPropertyValue(p);
+        if(v&&/vh/.test(v))r.style.setProperty(p,conv(v),r.style.getPropertyPriority(p));
+      });
+    }
+  }
+  function fix(){
+    if(!document.body||!broken())return;
+    for(var s=0;s<document.styleSheets.length;s++){
+      try{var rules=document.styleSheets[s].cssRules;for(var i=0;i<rules.length;i++)proc(rules[i]);}catch(e){}
+    }
+    document.querySelectorAll('[style*="vh"]').forEach(function(el){
+      props.forEach(function(p){
+        var v=el.style.getPropertyValue(p);
+        if(v&&/vh/.test(v))el.style.setProperty(p,conv(v));
+      });
+    });
+  }
+  fix(); setTimeout(fix,1500); setTimeout(fix,4000);
+  var tm;
+  new MutationObserver(function(){clearTimeout(tm);tm=setTimeout(fix,200);}).observe(document.head,{childList:true});
+})();
+"""
 
 private fun autofillJs(user: String, pass: String, remember: Boolean): String {
     val u = JSONObject.quote(user)
@@ -106,19 +150,19 @@ fun IglutechScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize().padding(pad),
                 factory = { c ->
                     WebView(c).apply {
+                        // Jawne MATCH_PARENT: bez tego silnik WebView traktuje wysokość jak wrap_content
+                        // i zeruje wysokość układu, przez co 100vh = 0 i strona zapada się do pustego okna.
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = false
                         settings.allowContentAccess = false
                         settings.javaScriptCanOpenWindowsAutomatically = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-
-                        // WebView dokleja do każdego żądania nagłówek X-Requested-With z ID aplikacji.
-                        // Serwery i WAF potrafią przez niego odrzucać zapytania do API, a Chrome go nie wysyła.
-                        // Pusta lista = nagłówek nie jest wysyłany do żadnego originu.
-                        if (WebViewFeature.isFeatureSupported(WebViewFeature.REQUESTED_WITH_HEADER_ALLOW_LIST)) {
-                            WebSettingsCompat.setRequestedWithHeaderOriginAllowList(settings, emptySet())
-                        }
 
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
@@ -132,10 +176,10 @@ fun IglutechScreen(onBack: () -> Unit) {
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
+                                if (url == null || !url.startsWith(IGLU_URL)) return
+                                view.evaluateJavascript(FIX_VH_JS, null)
                                 val cr = creds ?: return
-                                if (url != null && url.startsWith(IGLU_URL)) {
-                                    view.evaluateJavascript(autofillJs(cr.first, cr.second, cr.third), null)
-                                }
+                                view.evaluateJavascript(autofillJs(cr.first, cr.second, cr.third), null)
                             }
 
                             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
