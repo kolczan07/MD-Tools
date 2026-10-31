@@ -1,8 +1,12 @@
 package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
+import android.view.ViewTreeObserver
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -25,6 +29,7 @@ import androidx.fragment.app.FragmentActivity
 import org.json.JSONObject
 
 private const val IGLU_URL = "https://service.iglutech.eu"
+private const val TAG = "IgluWV"
 
 private fun autofillJs(user: String, pass: String, remember: Boolean): String {
     val u = JSONObject.quote(user)
@@ -104,20 +109,64 @@ fun IglutechScreen(onBack: () -> Unit) {
                         settings.allowContentAccess = false
                         settings.javaScriptCanOpenWindowsAutomatically = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+
+                        // UWAGA: celowo NIE modyfikujemy userAgentString — domyślny UA WebView,
+                        // taki sam jak w działającej starej wersji (MainActivity).
+
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                        // Bez WebChromeClient nie działają okna confirm/alert i część skryptów stron.
-                        webChromeClient = WebChromeClient()
+
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                                android.util.Log.d(TAG, "${msg.message()} @ ${msg.sourceId()}:${msg.lineNumber()}")
+                                return true
+                            }
+                        }
+
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
+                                android.util.Log.d(TAG, "onPageFinished: $url")
                                 val cr = creds ?: return
                                 if (url != null && url.startsWith(IGLU_URL)) {
                                     view.evaluateJavascript(autofillJs(cr.first, cr.second, cr.third), null)
                                 }
                             }
+
+                            override fun onReceivedError(
+                                view: WebView,
+                                request: WebResourceRequest,
+                                error: WebResourceError
+                            ) {
+                                android.util.Log.e(TAG, "onReceivedError: ${error.description} for ${request.url}")
+                            }
+
+                            override fun onReceivedHttpError(
+                                view: WebView,
+                                request: WebResourceRequest,
+                                errorResponse: android.webkit.WebResourceResponse
+                            ) {
+                                android.util.Log.e(TAG, "HTTP ${errorResponse.statusCode} for ${request.url}")
+                            }
                         }
-                        loadUrl(IGLU_URL)
+
+                        // NIE ładujemy tutaj — czekamy na niezerowe wymiary (patrz niżej).
                         web = this
+
+                        // Ładuj dopiero, gdy WebView ma szerokość i wysokość > 0.
+                        // Bez tego Chromium potrafi policzyć viewport jako 0 i nie wyrenderować treści.
+                        viewTreeObserver.addOnGlobalLayoutListener(
+                            object : ViewTreeObserver.OnGlobalLayoutListener {
+                                override fun onGlobalLayout() {
+                                    if (width > 0 && height > 0) {
+                                        viewTreeObserver.removeOnGlobalLayoutListener(this)
+                                        if (url == null) {
+                                            android.util.Log.d(TAG, "Ładuję $IGLU_URL (rozmiar: ${width}x${height})")
+                                            loadUrl(IGLU_URL)
+                                        }
+                                    }
+                                }
+                            }
+                        )
                     }
                 },
                 onRelease = { it.destroy() }
