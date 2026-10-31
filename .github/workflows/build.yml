@@ -12,7 +12,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # Wymagane sekrety (Settings -> Secrets and variables -> Actions).
       KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
       KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -54,14 +53,20 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
+      - name: Get APK info
+        id: apk-info
+        uses: hkusu/apk-info-action@v1
+        with:
+          apk-path: app/build/outputs/apk/release/*.apk
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -x
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
+          VER="${{ steps.apk-info.outputs.version-name }}"
           echo "APK=[$APK]"
-          VER=$(aapt dump badging "$APK" | grep -oP "versionName='\K[^']+")
           echo "VER=[$VER]"
           if [ -z "$VER" ]; then
             echo "::error::Nie udało się odczytać versionName z APK"
