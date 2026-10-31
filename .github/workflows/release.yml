@@ -27,7 +27,7 @@ jobs:
         run: >
           gradle assembleRelease --no-daemon
           -PversionName=${GITHUB_REF_NAME#v}
-          -PversionCode=${{ github.run_number }}
+          -PversionCode=$((100 + ${{ github.run_number }}))
       - name: Name the APK
         run: |
           ls -la app/build/outputs/apk/release/
