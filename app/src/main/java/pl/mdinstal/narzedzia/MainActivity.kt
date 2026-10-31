@@ -1,6 +1,7 @@
 package pl.mdinstal.narzedzia
 
 import android.graphics.Color as AColor
+import android.webkit.WebView
 import android.os.Bundle
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
@@ -40,6 +41,9 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
+        WebView.setWebContentsDebuggingEnabled(true)
+        }
         enableEdgeToEdge()
         themeMode = Prefs.theme(this)
         setContent {
