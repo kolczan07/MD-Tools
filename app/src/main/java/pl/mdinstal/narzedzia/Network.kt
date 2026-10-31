@@ -81,6 +81,18 @@ fun SpeedtestScreen(onBack: () -> Unit) {
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.allowFileAccess = false
+                    
+                    // --- POPRAWKI DLA ZBYT MAŁEGO EKRANU ---
+                    // 1. Włączamy obsługę gestów (pinch-to-zoom)
+                    settings.setSupportZoom(true)
+                    settings.builtInZoomControls = true
+                    settings.displayZoomControls = false // Ukrywa brzydkie przyciski +/- 
+                    
+                    // 2. Wymuszamy tryb responsywny i dopasowanie do ekranu
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
+                    settings.textZoom = 100
+                    
                     setBackgroundColor(android.graphics.Color.WHITE)
                     loadUrl("https://md-instal.fireprobe.net")
                 }
