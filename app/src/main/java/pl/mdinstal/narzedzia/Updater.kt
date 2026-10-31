@@ -36,9 +36,11 @@ import java.net.URL
 
 data class UpdateInfo(val version: String, val url: String, val notes: String, val size: Long)
 
-/** Aktualizacje z GitHub Releases (repo musi być publiczne). */
+/** Aktualizacje z GitHub Releases (repo publiczne — nazwa z -PupdateRepo). */
 object Updater {
-    const val REPO = "kolczan07/MD-Tools"
+    /** Bierze repo z BuildConfig (wstrzyknięte przez -PupdateRepo), fallback na sztywne. */
+    private val REPO: String
+        get() = BuildConfig.UPDATE_REPO.ifBlank { "kolczan07/MD-INSTAL-Native" }
 
     /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
     fun latest(): UpdateInfo? {
@@ -68,7 +70,7 @@ object Updater {
 
     fun download(ctx: Context, info: UpdateInfo, onProgress: (Int) -> Unit): File {
         val dir = File(ctx.cacheDir, "updates").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-        val f = File(dir, "MD-Tools-${info.version}.apk")
+        val f = File(dir, "MD-INSTAL-${info.version}.apk")
         val c = URL(info.url).openConnection() as HttpURLConnection
         c.connectTimeout = 15000
         c.readTimeout = 30000
