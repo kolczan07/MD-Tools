@@ -6,7 +6,7 @@ aktualizuje starą bez odinstalowywania.
 ## Jak podmienić w repozytorium
 1. W repo usuń: `app/src/main/java/` (stare pliki Kotlin), `app/src/main/assets/`,
    stary `AndroidManifest.xml`, stare `build.gradle.kts`, `settings.gradle.kts`, `.github/workflows/build.yml`.
-2. ZACHOWAJ: `release.jks` oraz `app/src/main/res/mipmap-*` (ikony aplikacji).
+2. ZACHOWAJ: `release.jks`. Ikona aplikacji jest w paczce (`res/mipmap-*`); podmień ją na własną, jeśli chcesz.
 3. Wgraj zawartość tej paczki na wierzch.
 4. Push na `main` uruchamia build (GitHub Actions → Artifacts → MD-INSTAL-apk).
 
