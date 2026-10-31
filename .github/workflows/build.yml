@@ -54,15 +54,23 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
-      - name: Publish GitHub Release (źródło aktualizacji w aplikacji)
+      - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          set -x
+          VER=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts) || VER=""
+          echo "VER=[$VER]"
+          if [ -z "$VER" ]; then
+            echo "::error::Nie udało się odczytać versionName z app/build.gradle.kts"
+            exit 1
+          fi
           TAG="v$VER"
           APK=$(ls app/build/outputs/apk/release/*.apk | head -n 1)
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK" --clobber
-          else
-            gh release create "$TAG" "$APK" --title "MD-Tools $VER" --notes "Wersja $VER" --target "$GITHUB_SHA"
-          fi
+          echo "TAG=[$TAG] APK=[$APK]"
+          
+          # Spróbuj utworzyć Release (jeśli istnieje, błąd jest ignorowany)
+          gh release create "$TAG" "$APK" --title "MD-Tools $VER" --notes "Wersja $VER" || true
+          
+          # Upewnij się, że APK jest wgrany (nadpisz, jeśli już był)
+          gh release upload "$TAG" "$APK" --clobber
