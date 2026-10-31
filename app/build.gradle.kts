@@ -4,10 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// Wartości z -P (GitHub Actions) lub domyślne (lokalnie / Android Studio)
+// Wartości z -P (GitHub Actions) lub domyślne (lokalnie)
 val propVersionName: String = (project.findProperty("versionName") as String?) ?: "2.6"
 val propVersionCode: Int = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 15
-val propUpdateRepo: String = (project.findProperty("updateRepo") as String?) ?: "kolczan07/MD-INSTAL-Native"
 
 android {
     namespace = "pl.mdinstal.narzedzia"
@@ -20,8 +19,8 @@ android {
         versionCode = propVersionCode
         versionName = propVersionName
 
-        // Wstrzyknięte do BuildConfig — updater ich użyje
-        buildConfigField("String", "UPDATE_REPO", "\"$propUpdateRepo\"")
+        // Repo updatera — na sztywno, zawsze to samo (kolczan07/MD-Tools)
+        buildConfigField("String", "UPDATE_REPO", "\"kolczan07/MD-Tools\"")
     }
 
     signingConfigs {
@@ -49,9 +48,9 @@ android {
 
     buildFeatures {
         compose = true
-        buildConfig = true   // ← potrzebne dla BuildConfig.UPDATE_REPO
+        buildConfig = true
     }
-    composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+    // composeOptions USUNIĘTE — od Kotlina 2.0 plugin sam dobiera wersję kompilatora
 
     applicationVariants.all {
         outputs.all {
