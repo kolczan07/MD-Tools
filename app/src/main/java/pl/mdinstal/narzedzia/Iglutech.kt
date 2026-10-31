@@ -109,8 +109,7 @@ fun IglutechScreen(onBack: () -> Unit) {
                         settings.allowContentAccess = false
                         settings.javaScriptCanOpenWindowsAutomatically = true
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-
-                        // UWAGA: celowo NIE modyfikujemy userAgentString — domyślny UA WebView,
+                        // Celowo NIE modyfikujemy userAgentString — domyślny UA WebView,
                         // taki sam jak w działającej starej wersji (MainActivity).
 
                         CookieManager.getInstance().setAcceptCookie(true)
