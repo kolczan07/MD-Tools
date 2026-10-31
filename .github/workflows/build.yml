@@ -53,11 +53,15 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
+      - name: Get APK path
+        id: apk-path
+        run: echo "path=$(find app/build/outputs/apk/release -name '*.apk' -type f | head -1)" >> $GITHUB_OUTPUT
+
       - name: Get APK info
         id: apk-info
         uses: hkusu/apk-info-action@v1
         with:
-          apk-path: app/build/outputs/apk/release/*.apk
+          apk-path: ${{ steps.apk-path.outputs.path }}
 
       - name: Publish GitHub Release
         env:
