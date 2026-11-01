@@ -96,7 +96,7 @@ private fun parseForecast(json: String): Forecast {
 private fun weatherIcon(code: Int): String = when {
     code == 0 -> "☀️"
     code in 1..3 -> "⛅"
-    code in 45..48 -> "🌫️"
+    code in 45..48 -> "☁️"
     code in 51..67 -> "🌧️"
     code in 71..77 -> "❄️"
     code in 80..82 -> "🌧️"
