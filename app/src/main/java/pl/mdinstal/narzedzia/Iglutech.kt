@@ -39,7 +39,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.delay
 import org.json.JSONObject
+import org.json.JSONTokener
 import kotlin.math.roundToInt
 
 private const val IGLU_URL = "https://service.iglutech.eu"
@@ -156,6 +158,40 @@ private const val LOCK_SCROLL_JS = """
   }
   lock();
   setInterval(lock,1500);
+})();
+"""
+
+/**
+ * Odczyt listy pomp z tabeli urządzeń (numer seryjny, model, partner, status Online/Offline).
+ * Zwraca tekst JSON (tablica) albo pusty tekst, gdy tabeli nie ma. Nic nie zmienia na stronie.
+ */
+private const val SCRAPE_JS = """
+(function(){
+  try{
+    var out=[], seen={};
+    var rows=document.querySelectorAll('tr');
+    for(var i=0;i<rows.length;i++){
+      var cells=rows[i].querySelectorAll('td');
+      if(cells.length<3) continue;
+      var t=[];
+      for(var j=0;j<cells.length;j++){
+        t.push((cells[j].innerText||cells[j].textContent||'').replace(/\s+/g,' ').trim());
+      }
+      var si=-1;
+      for(var k=0;k<t.length;k++){ if(/^\d{6,12}$/.test(t[k])){ si=k; break; } }
+      if(si<0) continue;
+      var serial=t[si];
+      if(seen[serial]) continue;
+      seen[serial]=1;
+      var status='';
+      for(var m=si-1;m>=0;m--){ if(/^(online|offline)$/i.test(t[m])){ status=t[m]; break; } }
+      if(!status){ for(var n=0;n<t.length;n++){ if(/^(online|offline)$/i.test(t[n])){ status=t[n]; break; } } }
+      var since='';
+      for(var q=0;q<t.length;q++){ if(/^\d{4}-\d{2}-\d{2}$/.test(t[q])){ since=t[q]; break; } }
+      out.push({serial:serial,model:t[si+1]||'',partner:t[si+2]||'',status:status,since:since});
+    }
+    return out.length?JSON.stringify(out):'';
+  }catch(e){ return ''; }
 })();
 """
 
@@ -289,6 +325,25 @@ fun IglutechScreen(onBack: () -> Unit) {
         } else {
             Log.d(TAG, "brak zapisanych danych logowania")
             ready = true
+        }
+    }
+
+    // Co kilka sekund odczytuje listę pomp ze strony, gdy WebView jest na stronie Iglutech
+    // i widać tabelę urządzeń. Dane trafiają do PumpStore (ekran "Pompy ciepła").
+    LaunchedEffect(web) {
+        val w = web ?: return@LaunchedEffect
+        while (true) {
+            delay(3000)
+            try {
+                if (isIglu(w.url)) {
+                    w.evaluateJavascript(SCRAPE_JS) { raw ->
+                        val json = try { JSONTokener(raw).nextValue() as? String } catch (e: Exception) { null }
+                        if (!json.isNullOrBlank()) PumpStore.merge(ctx, json)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "odczyt pomp: ${e.message}")
+            }
         }
     }
 
