@@ -10,6 +10,8 @@ data class Pump(
     val partner: String,
     val status: String,
     val since: String,
+    /** Adresy e-mail z wiersza tabeli (rozdzielone przecinkami), jeśli portal je pokazuje. */
+    val email: String = "",
     /** Kiedy ostatnio widziana na liście w portalu (ms). */
     val seen: Long
 ) {
@@ -37,6 +39,7 @@ object PumpStore {
                     partner = o.optString("partner"),
                     status = o.optString("status"),
                     since = o.optString("since"),
+                    email = o.optString("email"),
                     seen = o.optLong("seen")
                 )
             }.filter { it.serial.isNotBlank() }.sortedBy { it.serial }
@@ -69,6 +72,8 @@ object PumpStore {
                 partner = o.optString("partner"),
                 status = o.optString("status"),
                 since = o.optString("since"),
+                // Gdy w odczycie nie ma adresu (np. węższy układ strony), zostaje zapisany wcześniej.
+                email = o.optString("email").ifBlank { old[serial]?.email ?: "" },
                 seen = now
             )
             val prev = old[serial]
@@ -92,6 +97,7 @@ object PumpStore {
                     .put("partner", it.partner)
                     .put("status", it.status)
                     .put("since", it.since)
+                    .put("email", it.email)
                     .put("seen", it.seen)
             )
         }
@@ -124,6 +130,7 @@ object PumpStore {
                     .put("serial", it.serial)
                     .put("model", it.model)
                     .put("status", it.status)
+                    .put("email", it.email)
             )
         }
         return a.toString()
