@@ -1,6 +1,5 @@
 package pl.mdinstal.narzedzia
 
-import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -28,9 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,13 +38,13 @@ import java.util.Locale
 
 private val OnlineGreen = Color(0xFF16A34A)
 
-/** Lista pomp pobrana z portalu Iglutech. Dotknięcie wiersza kopiuje numer seryjny. */
+/** Lista pomp pobrana z portalu Iglutech. Dotknięcie wiersza otwiera tę pompę w portalu. */
 @Composable
-fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit) {
+fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (String) -> Unit) {
     val ctx = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     var pumps by remember { mutableStateOf(PumpStore.load(ctx)) }
     var updated by remember { mutableStateOf(PumpStore.updatedAt(ctx)) }
+    var sync by remember { mutableStateOf(PumpStore.syncState(ctx)) }
     var query by remember { mutableStateOf("") }
     var confirmClear by remember { mutableStateOf(false) }
 
@@ -56,6 +53,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit) {
         while (true) {
             pumps = PumpStore.load(ctx)
             updated = PumpStore.updatedAt(ctx)
+            sync = PumpStore.syncState(ctx)
             delay(2000)
         }
     }
@@ -64,7 +62,8 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit) {
         val q = query.trim().lowercase()
         if (q.isEmpty()) pumps
         else pumps.filter {
-            it.serial.contains(q) || it.model.lowercase().contains(q) || it.partner.lowercase().contains(q)
+            it.serial.contains(q) || it.model.lowercase().contains(q) ||
+                it.email.lowercase().contains(q)
         }
     }
     val onlineCount = pumps.count { it.online }
@@ -90,6 +89,18 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit) {
                 )
             }
 
+            val syncText = when {
+                sync.first == "running" && System.currentTimeMillis() - sync.second < 60_000 ->
+                    "Aktualizacja przy starcie: trwa…"
+                sync.first == "ok" -> "Aktualizacja przy starcie: zakończona"
+                sync.first == "login" -> "Aktualizacja przy starcie: wymaga zalogowania, otwórz Iglutech Service"
+                sync.first == "timeout" -> "Aktualizacja przy starcie: nie udała się"
+                else -> null
+            }
+            if (syncText != null) {
+                Text(syncText, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -97,21 +108,21 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(onClick = onOpenIglutech) { Text("Odśwież z Iglutech") }
+                Button(onClick = onOpenIglutech) { Text("Otwórz portal Iglutech") }
                 TextButton(enabled = pumps.isNotEmpty(), onClick = { confirmClear = true }) { Text("Wyczyść") }
             }
 
             if (pumps.isEmpty()) {
                 Text(
-                    "Otwórz Iglutech Service, zaloguj się i zostaw na chwilę stronę z listą urządzeń (Devices). " +
-                        "Lista pobierze się sama, a potem możesz wrócić tutaj.",
+                    "Lista pobiera się sama przy każdym uruchomieniu aplikacji, o ile jesteś zalogowany w Iglutech. " +
+                        "Jeśli jest pusta, otwórz Iglutech Service, zaloguj się i zostaw na chwilę stronę z listą urządzeń.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("Szukaj (numer, model, partner)") },
+                    label = { Text("Szukaj (numer, model, e-mail)") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -119,10 +130,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit) {
                 )
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(filtered, key = { it.serial }) { p ->
-                        PumpRow(p) {
-                            clipboard.setText(AnnotatedString(p.serial))
-                            Toast.makeText(ctx, "Skopiowano ${p.serial}", Toast.LENGTH_SHORT).show()
-                        }
+                        PumpRow(p) { onOpenPump(p.serial) }
                     }
                 }
             }
@@ -164,8 +172,9 @@ private fun PumpRow(p: Pump, onClick: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(p.serial, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 if (p.model.isNotBlank()) Text(p.model, fontSize = 15.sp)
-                if (p.partner.isNotBlank()) {
-                    Text(p.partner, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Zamiast nazwy partnera (u nas zawsze ta sama) pokazujemy adresy e-mail.
+                if (p.email.isNotBlank()) {
+                    Text(p.email, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Surface(
