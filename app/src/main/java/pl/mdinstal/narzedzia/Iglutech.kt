@@ -31,14 +31,32 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
+
+/** Skala strony w poziomie (0.9 = 90%). Mniej = więcej mieści się na ekranie. */
+private const val LANDSCAPE_SCALE = 0.9f
+
+/**
+ * Daje WebView większy obszar (rozmiar / scale), a sam widok jest potem pomniejszany o scale
+ * (scaleX/scaleY w update). Strona widzi więc większy ekran i mieści się na nim więcej, a całość
+ * wypełnia dostępne miejsce. Dotyk jest przeliczany przez system widoków Androida.
+ */
+private fun Modifier.enlarge(scale: Float): Modifier = layout { measurable, constraints ->
+    val w = (constraints.maxWidth / scale).roundToInt()
+    val h = (constraints.maxHeight / scale).roundToInt()
+    val placeable = measurable.measure(Constraints.fixed(w, h))
+    layout(constraints.maxWidth, constraints.maxHeight) { placeable.place(0, 0) }
+}
 
 /** Strona należy do Iglutech (także inne subdomeny, np. przekierowanie na stronę logowania). */
 private fun isIglu(url: String?): Boolean {
@@ -88,6 +106,33 @@ private const val FIX_VH_JS = """
   fix(); setTimeout(fix,1500); setTimeout(fix,4000);
   var tm;
   new MutationObserver(function(){clearTimeout(tm);tm=setTimeout(fix,200);}).observe(document.head,{childList:true});
+})();
+"""
+
+/**
+ * W poziomie panel boczny strony jest wyższy niż ekran, więc cała strona da się przewinąć,
+ * a obszar pod stroną (tło elementu html) jest jasnoszary. Ten skrypt maluje tło html
+ * kolorem tła aplikacji strony, żeby nie było jasnego paska.
+ */
+private const val FIX_BG_JS = """
+(function(){
+  function transparent(c){return !c||c==='transparent'||/rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(c);}
+  function pick(){
+    var b=document.body;
+    var first=b?b.firstElementChild:null;
+    var els=[document.getElementById('root'),document.getElementById('app'),first,first?first.firstElementChild:null,b];
+    for(var i=0;i<els.length;i++){
+      if(!els[i]) continue;
+      var c=getComputedStyle(els[i]).backgroundColor;
+      if(!transparent(c)) return c;
+    }
+    return '#070b14';
+  }
+  function apply(){
+    if(!document.body) return;
+    document.documentElement.style.setProperty('background-color',pick(),'important');
+  }
+  apply(); setTimeout(apply,1500); setTimeout(apply,4000);
 })();
 """
 
@@ -230,7 +275,7 @@ fun IglutechScreen(onBack: () -> Unit) {
     }
 
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
-    val body: @Composable (Modifier) -> Unit = { mod ->
+    val body: @Composable (Modifier, Float) -> Unit = { mod, zoom ->
         if (!ready) {
             Box(mod, contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
@@ -284,6 +329,7 @@ fun IglutechScreen(onBack: () -> Unit) {
                             override fun onPageFinished(view: WebView, url: String?) {
                                 if (!isIglu(url)) return
                                 view.evaluateJavascript(FIX_VH_JS, null)
+                                view.evaluateJavascript(FIX_BG_JS, null)
                                 runAutofill(view)
                             }
 
@@ -307,6 +353,12 @@ fun IglutechScreen(onBack: () -> Unit) {
                         loadUrl(IGLU_URL)
                     }
                 },
+                update = { w ->
+                    w.pivotX = 0f
+                    w.pivotY = 0f
+                    w.scaleX = zoom
+                    w.scaleY = zoom
+                },
                 onRelease = { it.destroy() }
             )
         }
@@ -314,8 +366,11 @@ fun IglutechScreen(onBack: () -> Unit) {
 
     if (landscape) {
         // W poziomie: pełny ekran, bez paska tytułu (cofanie gestem/przyciskiem systemowym)
-        body(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
+        body(
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).enlarge(LANDSCAPE_SCALE),
+            LANDSCAPE_SCALE
+        )
     } else {
-        AppScaffold("Iglutech Service", onBack) { pad -> body(Modifier.fillMaxSize().padding(pad)) }
+        AppScaffold("Iglutech Service", onBack) { pad -> body(Modifier.fillMaxSize().padding(pad), 1f) }
     }
 }
