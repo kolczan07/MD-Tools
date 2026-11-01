@@ -78,6 +78,10 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
     var pumpsOpen by remember { mutableStateOf(false) }
     // Gdy z listy pomp przechodzimy do Iglutech, po powrocie wracamy na listę.
     var pumpsFromIglu by remember { mutableStateOf(false) }
+    // Numer seryjny pompy do otwarcia w Iglutech (po kliknięciu na liście).
+    var pendingSerial by remember { mutableStateOf<String?>(null) }
+    // Synchronizacja listy pomp przy każdym uruchomieniu aplikacji.
+    var syncActive by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
         delay(1000)
         splash = false
@@ -96,9 +100,12 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
     fun back() {
         if (stack.size > 1) {
             val leaving = stack.removeAt(stack.lastIndex)
-            if (leaving == Screen.Iglutech && pumpsFromIglu) {
-                pumpsFromIglu = false
-                pumpsOpen = true
+            if (leaving == Screen.Iglutech) {
+                pendingSerial = null
+                if (pumpsFromIglu) {
+                    pumpsFromIglu = false
+                    pumpsOpen = true
+                }
             }
         }
     }
@@ -107,12 +114,24 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
     BackHandler(enabled = pumpsOpen) { pumpsOpen = false }
 
     Box(Modifier.fillMaxSize()) {
+        // Niewidoczna synchronizacja listy pomp: WebView pod interfejsem, krótko po starcie.
+        if (syncActive && stack.last() != Screen.Iglutech) {
+            PumpSyncView(onDone = { syncActive = false })
+        }
+
         if (pumpsOpen) {
             PumpsScreen(
                 onBack = { pumpsOpen = false },
                 onOpenIglutech = {
                     pumpsOpen = false
                     pumpsFromIglu = true
+                    pendingSerial = null
+                    go(Screen.Iglutech)
+                },
+                onOpenPump = { serial ->
+                    pumpsOpen = false
+                    pumpsFromIglu = true
+                    pendingSerial = serial
                     go(Screen.Iglutech)
                 }
             )
@@ -125,7 +144,7 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
                 Screen.Wifi -> WifiScreen(onBack = { back() })
                 Screen.Weather -> WeatherScreen(onBack = { back() })
-                Screen.Iglutech -> IglutechScreen(onBack = { back() })
+                Screen.Iglutech -> IglutechScreen(onBack = { back() }, openSerial = pendingSerial)
                 Screen.Shortcuts -> ShortcutsScreen(onBack = { back() })
                 Screen.Settings -> SettingsScreen(themeMode, onTheme, onBack = { back() }, onOpen = { go(it) })
                 Screen.IgluSettings -> IgluSettingsScreen(onBack = { back() })

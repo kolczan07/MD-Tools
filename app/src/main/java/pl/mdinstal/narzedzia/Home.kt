@@ -28,26 +28,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private data class Tile(
-    val icon: String,
-    val title: String,
-    val desc: String,
-    val target: Screen? = null,       // null = obsługa przez onOpenPumps
-    val isPumps: Boolean = false
-)
+/** target == null oznacza kafelek "Iglutech Service": otwiera listę pomp (ekran spoza stosu, obsługuje go MainActivity). */
+private data class Tile(val icon: String, val title: String, val desc: String, val target: Screen?)
 
 private val tools = listOf(
     Tile("📻", "Radio internetowe", "Wyszukiwarka stacji, ulubione, gra w tle", Screen.Radio),
     Tile("📶", "Sieć", "Speed Test, Skaner WiFi", Screen.Network),
     Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
-    Tile("🔧", "Iglutech Service", "Otwiera service.iglutech.eu", Screen.Iglutech),
-    Tile("🌡️", "Pompy ciepła", "Lista urządzeń z portalu Iglutech", isPumps = true),
+    Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null),
     Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts)
 )
 
@@ -57,7 +51,7 @@ private val docs = listOf(
 )
 
 @Composable
-fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit) {
+fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     Column(
         Modifier
@@ -87,10 +81,7 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit) {
         TileGrid(docs, onOpen, onOpenPumps)
 
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = 32.dp, bottom = 8.dp)
-                .alpha(0.7f),
+            Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp).alpha(0.7f),
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -102,13 +93,14 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit) {
 }
 
 @Composable
-private fun TileGrid(items: List<Tile>, onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit) {
+private fun TileGrid(items: List<Tile>, onOpen: (Screen) -> Unit, onPumps: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { t ->
                     ToolTile(t, Modifier.weight(1f)) {
-                        if (t.isPumps) onOpenPumps() else t.target?.let { onOpen(it) }
+                        val target = t.target
+                        if (target != null) onOpen(target) else onPumps()
                     }
                 }
                 if (row.size == 1) Spacer(Modifier.weight(1f))
@@ -123,10 +115,7 @@ private fun ToolTile(t: Tile, modifier: Modifier, onClick: () -> Unit) {
     AppCard(modifier = modifier.heightIn(min = 150.dp), onClick = onClick) {
         Column(Modifier.padding(16.dp)) {
             Box(
-                Modifier
-                    .size(44.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(cs.primary.copy(alpha = 0.12f)),
+                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(cs.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) { Text(t.icon, fontSize = 22.sp) }
             Spacer(Modifier.height(12.dp))

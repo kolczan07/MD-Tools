@@ -98,6 +98,19 @@ object PumpStore {
         prefs(ctx).edit().putString(KEY_LIST, a.toString()).putLong(KEY_UPDATED, now).apply()
     }
 
+    private const val KEY_SYNC = "sync_state"
+    private const val KEY_SYNC_AT = "sync_at"
+
+    /** Stan synchronizacji przy starcie aplikacji: running, ok, login, timeout. */
+    fun setSync(ctx: Context, state: String) {
+        prefs(ctx).edit().putString(KEY_SYNC, state).putLong(KEY_SYNC_AT, System.currentTimeMillis()).apply()
+    }
+
+    fun syncState(ctx: Context): Pair<String, Long> {
+        val p = prefs(ctx)
+        return Pair(p.getString(KEY_SYNC, "") ?: "", p.getLong(KEY_SYNC_AT, 0L))
+    }
+
     fun clear(ctx: Context) {
         prefs(ctx).edit().clear().apply()
     }
