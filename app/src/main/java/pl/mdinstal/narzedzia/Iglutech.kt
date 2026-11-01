@@ -187,7 +187,7 @@ private const val LOCK_SCROLL_JS = """
 """
 
 /**
- * Odczyt listy pomp z tabeli urządzeń (numer seryjny, model, partner, status Online/Offline).
+ * Odczyt listy pomp z tabeli urządzeń (numer seryjny, model, partner, status Online/Offline, e-mail).
  * Zwraca tekst JSON (tablica) albo pusty tekst, gdy tabeli nie ma. Nic nie zmienia na stronie.
  */
 private const val SCRAPE_JS = """
@@ -213,7 +213,12 @@ private const val SCRAPE_JS = """
       if(!status){ for(var n=0;n<t.length;n++){ if(/^(online|offline)$/i.test(t[n])){ status=t[n]; break; } } }
       var since='';
       for(var q=0;q<t.length;q++){ if(/^\d{4}-\d{2}-\d{2}$/.test(t[q])){ since=t[q]; break; } }
-      out.push({serial:serial,model:t[si+1]||'',partner:t[si+2]||'',status:status,since:since});
+      var emails=[];
+      for(var e=0;e<t.length;e++){
+        var mm=t[e].match(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g);
+        if(mm){ for(var x=0;x<mm.length;x++){ if(emails.indexOf(mm[x])<0) emails.push(mm[x]); } }
+      }
+      out.push({serial:serial,model:t[si+1]||'',partner:t[si+2]||'',status:status,since:since,email:emails.join(', ')});
     }
     return out.length?JSON.stringify(out):'';
   }catch(e){ return ''; }
