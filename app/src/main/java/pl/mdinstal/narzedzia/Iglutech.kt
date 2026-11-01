@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.net.Uri
 import android.util.Log
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -245,6 +246,11 @@ fun IglutechScreen(onBack: () -> Unit) {
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
+
+                        // Ciemne tło zamiast jasnoszarego, gdy strona nie wypełnia całego okna
+                        setBackgroundColor(0xFF070B14.toInt())
+                        // Bez sprężystego przeciągania na końcu strony (to ono odsłaniało pasek)
+                        overScrollMode = View.OVER_SCROLL_NEVER
 
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
