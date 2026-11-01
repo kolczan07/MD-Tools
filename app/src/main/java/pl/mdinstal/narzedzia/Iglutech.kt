@@ -40,8 +40,10 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import org.json.JSONTokener
+import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 
 private const val IGLU_URL = "https://service.iglutech.eu"
@@ -130,7 +132,7 @@ private const val FIX_BG_JS = """
 """
 
 /**
- * Tylko poziomo: gdy strona mieści się na ekranie, blokuje przewijanie całej strony,
+ * Poziomo i pionowo: gdy strona mieści się na ekranie, blokuje przewijanie całej strony,
  * a przewijanie listy (wewnątrz strony) nie przenosi się na stronę po dojechaniu do końca.
  * Gdy strona jest wyraźnie wyższa niż ekran (np. inne podstrony), przewijanie zostaje.
  */
@@ -139,16 +141,29 @@ private const val LOCK_SCROLL_JS = """
   if(!document.getElementById('igl-lock-style')){
     var st=document.createElement('style');
     st.id='igl-lock-style';
-    st.textContent='*{overscroll-behavior-y:contain !important}html,body{overscroll-behavior:none !important}';
+    st.textContent='*{overscroll-behavior-y:contain !important}html,body{overscroll-behavior:none !important;overflow-x:hidden !important}';
     (document.head||document.documentElement).appendChild(st);
   }
   if(window.__iglLock) return;
   window.__iglLock=true;
+  // Wysokość treści strony bez elementów wyjętych z układu (okienka, podpowiedzi),
+  // bo to one potrafią sztucznie powiększać dokument.
+  function contentH(){
+    var h=0, kids=document.body.children;
+    for(var i=0;i<kids.length;i++){
+      var k=kids[i], tn=k.tagName;
+      if(tn==='SCRIPT'||tn==='STYLE'||tn==='NOSCRIPT'||tn==='LINK') continue;
+      var cs=getComputedStyle(k);
+      if(cs.position==='absolute'||cs.position==='fixed'||cs.display==='none') continue;
+      h=Math.max(h,k.getBoundingClientRect().height);
+    }
+    return h;
+  }
   function lock(){
     var de=document.documentElement, b=document.body;
     if(!b) return;
     var over=Math.max(de.scrollHeight,b.scrollHeight)-window.innerHeight;
-    if(over<=40){
+    if(over<=40 || contentH()<=window.innerHeight+40){
       de.style.setProperty('overflow','hidden','important');
       b.style.setProperty('overflow','hidden','important');
     } else {
@@ -194,6 +209,42 @@ private const val SCRAPE_JS = """
   }catch(e){ return ''; }
 })();
 """
+
+/** Wykonuje JS i zwraca wynik jako tekst (skrypty zwracają tekst). */
+private suspend fun WebView.evalJs(js: String): String? = suspendCancellableCoroutine { cont ->
+    evaluateJavascript(js) { raw ->
+        val s = try { JSONTokener(raw).nextValue() as? String } catch (e: Exception) { null }
+        if (cont.isActive) cont.resume(s)
+    }
+}
+
+/**
+ * Otwiera pompę o danym numerze seryjnym: znajduje wiersz tabeli z tym numerem i klika go
+ * (link w wierszu albo komórkę z numerem). Zwraca "clicked", gdy wiersz znaleziono.
+ */
+private fun openPumpJs(serial: String): String {
+    val sq = JSONObject.quote(serial)
+    return """
+(function(serial){
+  try{
+    var rows=document.querySelectorAll('tr');
+    for(var i=0;i<rows.length;i++){
+      var cells=rows[i].querySelectorAll('td');
+      for(var j=0;j<cells.length;j++){
+        var tx=(cells[j].innerText||cells[j].textContent||'').replace(/\s+/g,' ').trim();
+        if(tx===serial){
+          var a=rows[i].querySelector('a[href]');
+          if(a){ a.click(); return 'clicked'; }
+          cells[j].click();
+          return 'clicked';
+        }
+      }
+    }
+    return '';
+  }catch(e){ return ''; }
+})($sq);
+""".trimIndent()
+}
 
 /**
  * Autouzupełnianie logowania. Czeka (do ~30 s) na widoczne pole hasła, wpisuje login i hasło
@@ -308,7 +359,7 @@ private fun autofillJs(user: String, pass: String, remember: Boolean, autoSubmit
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun IglutechScreen(onBack: () -> Unit) {
+fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
     val ctx = LocalContext.current
     val activity = ctx as FragmentActivity
     var ready by remember { mutableStateOf(false) }
@@ -344,6 +395,17 @@ fun IglutechScreen(onBack: () -> Unit) {
             } catch (e: Exception) {
                 Log.d(TAG, "odczyt pomp: ${e.message}")
             }
+        }
+    }
+
+    // Gdy ekran otwarto z listy pomp: po zalogowaniu i pojawieniu się tabeli kliknij wybraną pompę.
+    LaunchedEffect(web, openSerial) {
+        val w = web ?: return@LaunchedEffect
+        val serial = openSerial ?: return@LaunchedEffect
+        repeat(60) {
+            delay(1000)
+            val res = try { w.evalJs(openPumpJs(serial)) } catch (e: Exception) { null }
+            if (res == "clicked") return@LaunchedEffect
         }
     }
 
@@ -408,7 +470,7 @@ fun IglutechScreen(onBack: () -> Unit) {
                                 if (!isIglu(url)) return
                                 view.evaluateJavascript(FIX_VH_JS, null)
                                 view.evaluateJavascript(FIX_BG_JS, null)
-                                if (landscape) view.evaluateJavascript(LOCK_SCROLL_JS, null)
+                                view.evaluateJavascript(LOCK_SCROLL_JS, null)
                                 runAutofill(view)
                             }
 
@@ -443,13 +505,75 @@ fun IglutechScreen(onBack: () -> Unit) {
         }
     }
 
-    if (landscape) {
-        // W poziomie: pełny ekran, bez paska tytułu (cofanie gestem/przyciskiem systemowym)
-        body(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).background(Color(0xFF070B14)).enlarge(LANDSCAPE_SCALE),
-            LANDSCAPE_SCALE
-        )
-    } else {
-        AppScaffold("Iglutech Service", onBack) { pad -> body(Modifier.fillMaxSize().padding(pad).enlarge(VERTICAL_SCALE), VERTICAL_SCALE) }
+    // Bez paska tytułu w obu orientacjach: sama strona, cofanie gestem/przyciskiem systemowym.
+    val scale = if (landscape) LANDSCAPE_SCALE else VERTICAL_SCALE
+    body(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .background(Color(0xFF070B14))
+            .enlarge(scale),
+        scale
+    )
+}
+
+
+/**
+ * Niewidoczna synchronizacja listy pomp po starcie aplikacji. Ładuje portal w WebView ukrytym
+ * pod interfejsem (sesja z ciasteczek, bez wpisywania hasła), odczytuje tabelę urządzeń i kończy.
+ * Gdy sesja wygasła i portal pokazuje logowanie, kończy ze stanem "login".
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+fun PumpSyncView(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    var web by remember { mutableStateOf<WebView?>(null) }
+
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { c ->
+            WebView(c).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                CookieManager.getInstance().setAcceptCookie(true)
+                setBackgroundColor(0xFF070B14.toInt())
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                // Ukryta strona nie ma reagować na dotyk.
+                setOnTouchListener { _, _ -> true }
+                webViewClient = WebViewClient()
+                web = this
+                loadUrl(IGLU_URL)
+            }
+        },
+        onRelease = { it.destroy() }
+    )
+
+    LaunchedEffect(web) {
+        val w = web ?: return@LaunchedEffect
+        PumpStore.setSync(ctx, "running")
+        val start = System.currentTimeMillis()
+        var state = "timeout"
+        while (System.currentTimeMillis() - start < 30_000) {
+            delay(2000)
+            val url = w.url ?: continue
+            if (!isIglu(url)) continue
+            if (url.contains("/Account/Login", ignoreCase = true)) {
+                state = "login"
+                break
+            }
+            val json = try { w.evalJs(SCRAPE_JS) } catch (e: Exception) { null }
+            if (!json.isNullOrBlank() && PumpStore.merge(ctx, json) > 0) {
+                state = "ok"
+                break
+            }
+        }
+        PumpStore.setSync(ctx, state)
+        onDone()
     }
 }
