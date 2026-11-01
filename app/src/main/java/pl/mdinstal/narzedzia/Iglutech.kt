@@ -16,6 +16,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
@@ -31,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -43,8 +45,8 @@ import kotlin.math.roundToInt
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
 
-/** Skala strony w poziomie (0.9 = 90%). Mniej = więcej mieści się na ekranie. */
-private const val LANDSCAPE_SCALE = 0.9f
+/** Skala strony w poziomie (0.75 = 75%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
+private const val LANDSCAPE_SCALE = 0.70f
 
 /**
  * Daje WebView większy obszar (rozmiar / scale), a sam widok jest potem pomniejszany o scale
@@ -110,27 +112,13 @@ private const val FIX_VH_JS = """
 """
 
 /**
- * W poziomie panel boczny strony jest wyższy niż ekran, więc cała strona da się przewinąć,
- * a obszar pod stroną (tło elementu html) jest jasnoszary. Ten skrypt maluje tło html
- * kolorem tła aplikacji strony, żeby nie było jasnego paska.
+ * Gdy strona jest wyższa niż ekran, pod nią widać tło elementu html (jasne). Ustawiamy mu
+ * ciemny kolor zbliżony do tła aplikacji strony, żeby nie było jasnego paska.
  */
 private const val FIX_BG_JS = """
 (function(){
-  function transparent(c){return !c||c==='transparent'||/rgba\(\s*\d+,\s*\d+,\s*\d+,\s*0\s*\)/.test(c);}
-  function pick(){
-    var b=document.body;
-    var first=b?b.firstElementChild:null;
-    var els=[document.getElementById('root'),document.getElementById('app'),first,first?first.firstElementChild:null,b];
-    for(var i=0;i<els.length;i++){
-      if(!els[i]) continue;
-      var c=getComputedStyle(els[i]).backgroundColor;
-      if(!transparent(c)) return c;
-    }
-    return '#070b14';
-  }
   function apply(){
-    if(!document.body) return;
-    document.documentElement.style.setProperty('background-color',pick(),'important');
+    document.documentElement.style.setProperty('background-color','#070b14','important');
   }
   apply(); setTimeout(apply,1500); setTimeout(apply,4000);
 })();
@@ -367,7 +355,7 @@ fun IglutechScreen(onBack: () -> Unit) {
     if (landscape) {
         // W poziomie: pełny ekran, bez paska tytułu (cofanie gestem/przyciskiem systemowym)
         body(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).enlarge(LANDSCAPE_SCALE),
+            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).background(Color(0xFF070B14)).enlarge(LANDSCAPE_SCALE),
             LANDSCAPE_SCALE
         )
     } else {
