@@ -62,7 +62,8 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
         val q = query.trim().lowercase()
         if (q.isEmpty()) pumps
         else pumps.filter {
-            it.serial.contains(q) || it.model.lowercase().contains(q) || it.partner.lowercase().contains(q)
+            it.serial.contains(q) || it.model.lowercase().contains(q) ||
+                it.email.lowercase().contains(q)
         }
     }
     val onlineCount = pumps.count { it.online }
@@ -121,7 +122,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("Szukaj (numer, model, partner)") },
+                    label = { Text("Szukaj (numer, model, e-mail)") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -171,8 +172,9 @@ private fun PumpRow(p: Pump, onClick: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(p.serial, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 if (p.model.isNotBlank()) Text(p.model, fontSize = 15.sp)
-                if (p.partner.isNotBlank()) {
-                    Text(p.partner, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // Zamiast nazwy partnera (u nas zawsze ta sama) pokazujemy adresy e-mail.
+                if (p.email.isNotBlank()) {
+                    Text(p.email, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Surface(
