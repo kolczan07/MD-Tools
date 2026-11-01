@@ -45,9 +45,11 @@ import kotlin.math.roundToInt
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
 
-/** Skala strony (0.75 = 75%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
+/** Skala strony w poziomie (0.70 = 70%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
 private const val LANDSCAPE_SCALE = 0.70f
-private const val PORTRAIT_SCALE = 0.70f
+
+/** Skala strony w pionie (1.0 = bez zmian). */
+private const val VERTICAL_SCALE = 0.70f
 
 /**
  * Daje WebView większy obszar (rozmiar / scale), a sam widok jest potem pomniejszany o scale
@@ -122,6 +124,38 @@ private const val FIX_BG_JS = """
     document.documentElement.style.setProperty('background-color','#070b14','important');
   }
   apply(); setTimeout(apply,1500); setTimeout(apply,4000);
+})();
+"""
+
+/**
+ * Tylko poziomo: gdy strona mieści się na ekranie, blokuje przewijanie całej strony,
+ * a przewijanie listy (wewnątrz strony) nie przenosi się na stronę po dojechaniu do końca.
+ * Gdy strona jest wyraźnie wyższa niż ekran (np. inne podstrony), przewijanie zostaje.
+ */
+private const val LOCK_SCROLL_JS = """
+(function(){
+  if(!document.getElementById('igl-lock-style')){
+    var st=document.createElement('style');
+    st.id='igl-lock-style';
+    st.textContent='*{overscroll-behavior-y:contain !important}html,body{overscroll-behavior:none !important}';
+    (document.head||document.documentElement).appendChild(st);
+  }
+  if(window.__iglLock) return;
+  window.__iglLock=true;
+  function lock(){
+    var de=document.documentElement, b=document.body;
+    if(!b) return;
+    var over=Math.max(de.scrollHeight,b.scrollHeight)-window.innerHeight;
+    if(over<=40){
+      de.style.setProperty('overflow','hidden','important');
+      b.style.setProperty('overflow','hidden','important');
+    } else {
+      de.style.removeProperty('overflow');
+      b.style.removeProperty('overflow');
+    }
+  }
+  lock();
+  setInterval(lock,1500);
 })();
 """
 
@@ -319,6 +353,7 @@ fun IglutechScreen(onBack: () -> Unit) {
                                 if (!isIglu(url)) return
                                 view.evaluateJavascript(FIX_VH_JS, null)
                                 view.evaluateJavascript(FIX_BG_JS, null)
+                                if (landscape) view.evaluateJavascript(LOCK_SCROLL_JS, null)
                                 runAutofill(view)
                             }
 
@@ -360,6 +395,6 @@ fun IglutechScreen(onBack: () -> Unit) {
             LANDSCAPE_SCALE
         )
     } else {
-        AppScaffold("Iglutech Service", onBack) { pad -> body(Modifier.fillMaxSize().padding(pad), 1f) }
+        AppScaffold("Iglutech Service", onBack) { pad -> body(Modifier.fillMaxSize().padding(pad).enlarge(VERTICAL_SCALE), VERTICAL_SCALE) }
     }
 }
