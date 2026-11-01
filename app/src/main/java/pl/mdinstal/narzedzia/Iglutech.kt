@@ -1,6 +1,7 @@
 package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.ConsoleMessage
@@ -32,6 +33,12 @@ import org.json.JSONObject
 
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
+
+/** Strona należy do Iglutech (także inne subdomeny, np. przekierowanie na stronę logowania). */
+private fun isIglu(url: String?): Boolean {
+    val host = url?.let { Uri.parse(it).host } ?: return false
+    return host == "iglutech.eu" || host.endsWith(".iglutech.eu")
+}
 
 /**
  * Bezpiecznik: jeśli w tym WebView jednostki vh dają 0, przelicza je w stylach strony na piksele.
@@ -78,40 +85,92 @@ private const val FIX_VH_JS = """
 })();
 """
 
+/**
+ * Autouzupełnianie logowania. Czeka (do ~30 s) na widoczne pole hasła, wpisuje login i hasło
+ * tak, żeby frameworki (React/Vue/Angular) zauważyły zmianę, a po chwili sprawdza,
+ * czy strona nie wyczyściła pól przy ponownym renderowaniu. Wyniki idą do logcat (tag IgluWV, prefiks IGL-AF).
+ */
 private fun autofillJs(user: String, pass: String, remember: Boolean): String {
     val u = JSONObject.quote(user)
     val p = JSONObject.quote(pass)
     return """
 (function(u,p,r){
+  if(window.__iglAF) return;
+  window.__iglAF=true;
   var tries=0;
+  var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+  function visible(el){
+    var rc=el.getBoundingClientRect();
+    return rc.width>0&&rc.height>0&&getComputedStyle(el).visibility!=='hidden';
+  }
   function setVal(el,v){
-    var d=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value');
-    d.set.call(el,v);
+    setter.call(el,v);
     el.dispatchEvent(new Event('input',{bubbles:true}));
     el.dispatchEvent(new Event('change',{bubbles:true}));
+    el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true}));
+  }
+  function textLike(el){
+    var ty=(el.type||'text').toLowerCase();
+    return ty==='text'||ty==='email'||ty==='tel';
+  }
+  function findPw(){
+    var byId=document.getElementById('Input_Password');
+    if(byId) return byId;
+    var all=document.querySelectorAll('input[type=password]');
+    for(var k=0;k<all.length;k++){ if(visible(all[k])) return all[k]; }
+    return null;
+  }
+  function findUser(pw){
+    var byId=document.getElementById('Input_Username');
+    if(byId) return byId;
+    var inputs=Array.prototype.slice.call(document.querySelectorAll('input'));
+    var idx=inputs.indexOf(pw);
+    for(var i=idx-1;i>=0;i--){
+      if(textLike(inputs[i])&&visible(inputs[i])) return inputs[i];
+    }
+    for(var j=0;j<inputs.length;j++){
+      var el=inputs[j];
+      var hint=((el.name||'')+' '+(el.id||'')+' '+(el.autocomplete||'')+' '+(el.placeholder||'')).toLowerCase();
+      if(textLike(el)&&visible(el)&&/user|login|mail|nick/.test(hint)) return el;
+    }
+    return null;
+  }
+  function fillOnce(){
+    var pw=findPw();
+    if(!pw) return false;
+    var us=findUser(pw);
+    if(us&&!us.value) setVal(us,u);
+    if(!pw.value) setVal(pw,p);
+    return us?true:false;
+  }
+  function tickRemember(){
+    var rb=document.getElementById('Input_RememberLogin');
+    if(rb){ rb.checked=r; return; }
+    if(!r) return;
+    Array.prototype.slice.call(document.querySelectorAll('input')).forEach(function(i){
+      if((i.type||'').toLowerCase()==='checkbox'){
+        var lab=(i.id||'')+' '+(i.name||'')+' '+((i.labels&&i.labels[0])?i.labels[0].textContent:'')+' '+(i.parentElement?i.parentElement.textContent:'');
+        if(/remember|zapamiętaj|zapamietaj/i.test(lab)&&!i.checked) i.click();
+      }
+    });
   }
   var t=setInterval(function(){
-    var pw=document.querySelector('input[type=password]');
+    tries++;
+    var pw=findPw();
     if(pw){
-      var inputs=Array.prototype.slice.call(document.querySelectorAll('input'));
-      var idx=inputs.indexOf(pw), us=null;
-      for(var i=idx-1;i>=0;i--){
-        var ty=(inputs[i].type||'text').toLowerCase();
-        if(ty==='text'||ty==='email'){us=inputs[i];break;}
-      }
-      if(us) setVal(us,u);
-      setVal(pw,p);
-      if(r){
-        inputs.forEach(function(i){
-          if((i.type||'').toLowerCase()==='checkbox'){
-            var lab=(i.id||'')+' '+(i.name||'')+' '+((i.labels&&i.labels[0])?i.labels[0].textContent:'')+' '+(i.parentElement?i.parentElement.textContent:'');
-            if(/remember/i.test(lab)&&!i.checked) i.click();
-          }
-        });
-      }
+      var gotUser=fillOnce();
+      tickRemember();
+      console.log('IGL-AF: filled, user field found='+gotUser);
       clearInterval(t);
+      setTimeout(function(){ if(fillOnce()) console.log('IGL-AF: refilled after rerender'); },1500);
+      setTimeout(function(){ fillOnce(); window.__iglAF=false; },4000);
+      return;
     }
-    if(++tries>20) clearInterval(t);
+    if(tries>=60){
+      console.log('IGL-AF: no visible password field after 30s');
+      clearInterval(t);
+      window.__iglAF=false;
+    }
   },500);
 })($u,$p,$remember);
 """.trimIndent()
@@ -130,9 +189,13 @@ fun IglutechScreen(onBack: () -> Unit) {
         if (Prefs.hasCreds(ctx)) {
             authenticate(activity, "Logowanie do Iglutech", "Potwierdź tożsamość, aby wpisać zapisane dane") { ok ->
                 if (ok) creds = Prefs.creds(ctx)
+                Log.d(TAG, "auth ok=$ok, creds loaded=${creds != null}")
                 ready = true
             }
-        } else ready = true
+        } else {
+            Log.d(TAG, "brak zapisanych danych logowania")
+            ready = true
+        }
     }
 
     BackHandler {
@@ -174,12 +237,29 @@ fun IglutechScreen(onBack: () -> Unit) {
                             }
                         }
 
+                        val runAutofill: (WebView) -> Unit = { view ->
+                            val cr = creds
+                            if (cr == null) {
+                                Log.d(TAG, "autofill pominięty: brak danych")
+                            } else if (cr.first.isBlank() && cr.second.isBlank()) {
+                                Log.d(TAG, "autofill pominięty: puste dane")
+                            } else {
+                                view.evaluateJavascript(autofillJs(cr.first, cr.second, cr.third), null)
+                            }
+                        }
+
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
-                                if (url == null || !url.startsWith(IGLU_URL)) return
+                                if (!isIglu(url)) return
                                 view.evaluateJavascript(FIX_VH_JS, null)
-                                val cr = creds ?: return
-                                view.evaluateJavascript(autofillJs(cr.first, cr.second, cr.third), null)
+                                runAutofill(view)
+                            }
+
+                            // Zmiany tras w aplikacji jednostronicowej (SPA) nie wywołują onPageFinished,
+                            // a formularz logowania może pojawić się właśnie po takiej zmianie.
+                            override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                                if (!isIglu(url)) return
+                                runAutofill(view)
                             }
 
                             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
