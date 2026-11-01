@@ -8,6 +8,9 @@ plugins {
 val propVersionName: String = (project.findProperty("versionName") as String?) ?: "2.6"
 val propVersionCode: Int = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 15
 
+// Keystore: lokalnie release.jks w root projektu, w CI ścieżka z env KEYSTORE_FILE
+val ksFile = file(System.getenv("KEYSTORE_FILE") ?: "${rootDir}/release.jks")
+
 android {
     namespace = "pl.mdinstal.narzedzia"
     compileSdk = 34
@@ -25,8 +28,7 @@ android {
 
     signingConfigs {
         create("release") {
-            // Lokalnie: release.jks w root projektu. W CI: ścieżka z env KEYSTORE_FILE
-            storeFile = file(System.getenv("KEYSTORE_FILE") ?: "${rootDir}/release.jks")
+            storeFile = ksFile
             storePassword = System.getenv("KEYSTORE_PASSWORD") ?: ""
             keyAlias = System.getenv("KEY_ALIAS") ?: "mdinstal"
             keyPassword = System.getenv("KEY_PASSWORD") ?: ""
@@ -34,6 +36,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Ten sam podpis co release => debug aktualizuje zainstalowaną aplikację (dane zostają).
+            // Bez keystore (np. lokalnie) zostaje zwykły podpis debug.
+            if (ksFile.exists()) signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("release")
