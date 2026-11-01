@@ -1,6 +1,7 @@
 package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
+import android.content.res.Configuration
 import android.net.Uri
 import android.util.Log
 import android.view.ViewGroup
@@ -15,6 +16,9 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
@@ -26,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.fragment.app.FragmentActivity
@@ -90,11 +95,11 @@ private const val FIX_VH_JS = """
  * tak, żeby frameworki (React/Vue/Angular) zauważyły zmianę, a po chwili sprawdza,
  * czy strona nie wyczyściła pól przy ponownym renderowaniu. Wyniki idą do logcat (tag IgluWV, prefiks IGL-AF).
  */
-private fun autofillJs(user: String, pass: String, remember: Boolean): String {
+private fun autofillJs(user: String, pass: String, remember: Boolean, autoSubmit: Boolean = true): String {
     val u = JSONObject.quote(user)
     val p = JSONObject.quote(pass)
     return """
-(function(u,p,r){
+(function(u,p,r,s){
   if(window.__iglAF) return;
   window.__iglAF=true;
   var tries=0;
@@ -154,6 +159,23 @@ private fun autofillJs(user: String, pass: String, remember: Boolean): String {
       }
     });
   }
+  function submitForm(pw){
+    // Bezpiecznik przed pętlą przy błędnym haśle: nie klikaj ponownie, jeśli ostatnie kliknięcie było < 60 s temu.
+    try{
+      var last=parseInt(sessionStorage.getItem('iglSubmitted')||'0',10);
+      if(Date.now()-last<60000) return;
+      sessionStorage.setItem('iglSubmitted',String(Date.now()));
+    }catch(e){ return; }
+    var f=pw.form;
+    if(!f){ console.log('IGL-AF: no form to submit'); return; }
+    var btns=f.querySelectorAll('button[type=submit],input[type=submit],button:not([type])');
+    var b=null;
+    for(var i=0;i<btns.length;i++){
+      if((btns[i].value||'').toLowerCase()!=='cancel'){ b=btns[i]; break; }
+    }
+    if(b) b.click(); else if(f.requestSubmit) f.requestSubmit(); else f.submit();
+    console.log('IGL-AF: submitted');
+  }
   var t=setInterval(function(){
     tries++;
     var pw=findPw();
@@ -162,7 +184,10 @@ private fun autofillJs(user: String, pass: String, remember: Boolean): String {
       tickRemember();
       console.log('IGL-AF: filled, user field found='+gotUser);
       clearInterval(t);
-      setTimeout(function(){ if(fillOnce()) console.log('IGL-AF: refilled after rerender'); },1500);
+      setTimeout(function(){
+        fillOnce();
+        if(s) submitForm(pw);
+      },600);
       setTimeout(function(){ fillOnce(); window.__iglAF=false; },4000);
       return;
     }
@@ -172,7 +197,7 @@ private fun autofillJs(user: String, pass: String, remember: Boolean): String {
       window.__iglAF=false;
     }
   },500);
-})($u,$p,$remember);
+})($u,$p,$remember,$autoSubmit);
 """.trimIndent()
 }
 
@@ -203,14 +228,15 @@ fun IglutechScreen(onBack: () -> Unit) {
         if (w != null && w.canGoBack()) w.goBack() else onBack()
     }
 
-    AppScaffold("Iglutech Service", onBack) { pad ->
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val body: @Composable (Modifier) -> Unit = { mod ->
         if (!ready) {
-            Box(Modifier.fillMaxSize().padding(pad), contentAlignment = Alignment.Center) {
+            Box(mod, contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
         } else {
             AndroidView(
-                modifier = Modifier.fillMaxSize().padding(pad),
+                modifier = mod,
                 factory = { c ->
                     WebView(c).apply {
                         // Jawne MATCH_PARENT: bez tego silnik WebView traktuje wysokość jak wrap_content
@@ -278,5 +304,12 @@ fun IglutechScreen(onBack: () -> Unit) {
                 onRelease = { it.destroy() }
             )
         }
+    }
+
+    if (landscape) {
+        // W poziomie: pełny ekran, bez paska tytułu (cofanie gestem/przyciskiem systemowym)
+        body(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing))
+    } else {
+        AppScaffold("Iglutech Service", onBack) { pad -> body(Modifier.fillMaxSize().padding(pad)) }
     }
 }
