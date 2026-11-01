@@ -45,8 +45,9 @@ import kotlin.math.roundToInt
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
 
-/** Skala strony w poziomie (0.75 = 75%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
+/** Skala strony (0.75 = 75%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
 private const val LANDSCAPE_SCALE = 0.70f
+private const val PORTRAIT_SCALE = 0.70f
 
 /**
  * Daje WebView większy obszar (rozmiar / scale), a sam widok jest potem pomniejszany o scale
