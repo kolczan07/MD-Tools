@@ -74,6 +74,10 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
     var splash by remember { mutableStateOf(true) }
     val ctx = LocalContext.current
     var autoUpdate by remember { mutableStateOf<UpdateInfo?>(null) }
+    // Ekran "Pompy ciepła" (lista z Iglutech) jest poza stosem ekranów.
+    var pumpsOpen by remember { mutableStateOf(false) }
+    // Gdy z listy pomp przechodzimy do Iglutech, po powrocie wracamy na listę.
+    var pumpsFromIglu by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(1000)
         splash = false
@@ -89,26 +93,46 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
     }
 
     fun go(s: Screen) { stack.add(s) }
-    fun back() { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
+    fun back() {
+        if (stack.size > 1) {
+            val leaving = stack.removeAt(stack.lastIndex)
+            if (leaving == Screen.Iglutech && pumpsFromIglu) {
+                pumpsFromIglu = false
+                pumpsOpen = true
+            }
+        }
+    }
 
     BackHandler(enabled = stack.size > 1) { back() }
+    BackHandler(enabled = pumpsOpen) { pumpsOpen = false }
 
     Box(Modifier.fillMaxSize()) {
-        // Ekrany są rozłączne: wyświetlany jest dokładnie jeden naraz.
-        when (stack.last()) {
-            Screen.Home -> HomeScreen(onOpen = { go(it) })
-            Screen.Radio -> RadioScreen(onBack = { back() })
-            Screen.Network -> NetworkScreen(onBack = { back() }, onOpen = { go(it) })
-            Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
-            Screen.Wifi -> WifiScreen(onBack = { back() })
-            Screen.Weather -> WeatherScreen(onBack = { back() })
-            Screen.Iglutech -> IglutechScreen(onBack = { back() })
-            Screen.Shortcuts -> ShortcutsScreen(onBack = { back() })
-            Screen.Settings -> SettingsScreen(themeMode, onTheme, onBack = { back() }, onOpen = { go(it) })
-            Screen.IgluSettings -> IgluSettingsScreen(onBack = { back() })
-            Screen.About -> AboutScreen(onBack = { back() })
-            Screen.Schematic -> SchematicScreen(onBack = { back() })
-            Screen.Protocol -> ProtocolScreen(onBack = { back() })
+        if (pumpsOpen) {
+            PumpsScreen(
+                onBack = { pumpsOpen = false },
+                onOpenIglutech = {
+                    pumpsOpen = false
+                    pumpsFromIglu = true
+                    go(Screen.Iglutech)
+                }
+            )
+        } else {
+            // Ekrany są rozłączne: wyświetlany jest dokładnie jeden naraz.
+            when (stack.last()) {
+                Screen.Home -> HomeScreen(onOpen = { go(it) }, onOpenPumps = { pumpsOpen = true })
+                Screen.Radio -> RadioScreen(onBack = { back() })
+                Screen.Network -> NetworkScreen(onBack = { back() }, onOpen = { go(it) })
+                Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
+                Screen.Wifi -> WifiScreen(onBack = { back() })
+                Screen.Weather -> WeatherScreen(onBack = { back() })
+                Screen.Iglutech -> IglutechScreen(onBack = { back() })
+                Screen.Shortcuts -> ShortcutsScreen(onBack = { back() })
+                Screen.Settings -> SettingsScreen(themeMode, onTheme, onBack = { back() }, onOpen = { go(it) })
+                Screen.IgluSettings -> IgluSettingsScreen(onBack = { back() })
+                Screen.About -> AboutScreen(onBack = { back() })
+                Screen.Schematic -> SchematicScreen(onBack = { back() })
+                Screen.Protocol -> ProtocolScreen(onBack = { back() })
+            }
         }
 
         autoUpdate?.let { UpdateDialog(it) { autoUpdate = null } }
