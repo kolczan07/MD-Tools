@@ -49,6 +49,12 @@ import kotlin.math.roundToInt
 private const val IGLU_URL = "https://service.iglutech.eu"
 private const val TAG = "IgluWV"
 
+/** Odczyt listy pomp: co ile ms próbować, dopóki nie uda się pierwszy raz (czekamy na tabelę). */
+private const val SCRAPE_FAST_MS = 3_000L
+
+/** Odczyt listy pomp po pierwszym udanym odczycie: co ile ms odświeżać (60 000 = raz na minutę). */
+private const val SCRAPE_SLOW_MS = 60_000L
+
 /** Skala strony w poziomie (0.70 = 70%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
 private const val LANDSCAPE_SCALE = 0.70f
 
@@ -159,11 +165,15 @@ private const val LOCK_SCROLL_JS = """
     }
     return h;
   }
+  var locked=null;
   function lock(){
     var de=document.documentElement, b=document.body;
     if(!b) return;
     var over=Math.max(de.scrollHeight,b.scrollHeight)-window.innerHeight;
-    if(over<=40 || contentH()<=window.innerHeight+40){
+    var want=(over<=40 || contentH()<=window.innerHeight+40);
+    if(want===locked) return;
+    locked=want;
+    if(want){
       de.style.setProperty('overflow','hidden','important');
       b.style.setProperty('overflow','hidden','important');
     } else {
@@ -172,7 +182,7 @@ private const val LOCK_SCROLL_JS = """
     }
   }
   lock();
-  setInterval(lock,1500);
+  setInterval(lock,4000);
 })();
 """
 
@@ -379,18 +389,18 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
         }
     }
 
-    // Co kilka sekund odczytuje listę pomp ze strony, gdy WebView jest na stronie Iglutech
-    // i widać tabelę urządzeń. Dane trafiają do PumpStore (ekran "Pompy ciepła").
+    // Odczytuje listę pomp ze strony, gdy WebView jest na stronie Iglutech i widać tabelę urządzeń:
+    // co kilka sekund do pierwszego udanego odczytu, potem raz na minutę.
+    // Dane trafiają do PumpStore (ekran "Pompy ciepła").
     LaunchedEffect(web) {
         val w = web ?: return@LaunchedEffect
+        var gotFirst = false
         while (true) {
-            delay(3000)
+            delay(if (gotFirst) SCRAPE_SLOW_MS else SCRAPE_FAST_MS)
             try {
                 if (isIglu(w.url)) {
-                    w.evaluateJavascript(SCRAPE_JS) { raw ->
-                        val json = try { JSONTokener(raw).nextValue() as? String } catch (e: Exception) { null }
-                        if (!json.isNullOrBlank()) PumpStore.merge(ctx, json)
-                    }
+                    val json = w.evalJs(SCRAPE_JS)
+                    if (!json.isNullOrBlank() && PumpStore.merge(ctx, json) > 0) gotFirst = true
                 }
             } catch (e: Exception) {
                 Log.d(TAG, "odczyt pomp: ${e.message}")
