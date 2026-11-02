@@ -55,6 +55,15 @@ private const val SCRAPE_FAST_MS = 3_000L
 /** Odczyt listy pomp po pierwszym udanym odczycie: co ile ms odświeżać (60 000 = raz na minutę). */
 private const val SCRAPE_SLOW_MS = 60_000L
 
+/**
+ * Przełączniki skryptów wstrzykiwanych do strony. Do szukania przyczyny zacinania:
+ * wyłączaj po jednym (false), buduj i sprawdzaj stronę pompy.
+ */
+private const val ENABLE_VH_FIX = true
+private const val ENABLE_BG_FIX = true
+private const val ENABLE_LOCK = true
+private const val ENABLE_SCRAPE = true
+
 /** Skala strony w poziomie (0.70 = 70%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
 private const val LANDSCAPE_SCALE = 0.70f
 
@@ -118,6 +127,8 @@ private const val FIX_VH_JS = """
       });
     });
   }
+  // Gdy vh działa normalnie, nic nie robimy i nie zakładamy obserwatora (oszczędza pracę strony).
+  if(!document.body||!broken()) return;
   fix(); setTimeout(fix,1500); setTimeout(fix,4000);
   var tm;
   new MutationObserver(function(){clearTimeout(tm);tm=setTimeout(fix,200);}).observe(document.head,{childList:true});
@@ -147,7 +158,7 @@ private const val LOCK_SCROLL_JS = """
   if(!document.getElementById('igl-lock-style')){
     var st=document.createElement('style');
     st.id='igl-lock-style';
-    st.textContent='*{overscroll-behavior-y:contain !important}html,body{overscroll-behavior:none !important;overflow-x:hidden !important}';
+    st.textContent='html,body{overscroll-behavior:none !important}html{overflow-x:hidden !important}';
     (document.head||document.documentElement).appendChild(st);
   }
   if(window.__iglLock) return;
@@ -168,21 +179,19 @@ private const val LOCK_SCROLL_JS = """
   var locked=null;
   function lock(){
     var de=document.documentElement, b=document.body;
-    if(!b) return;
+    if(!b || document.hidden) return;
     var over=Math.max(de.scrollHeight,b.scrollHeight)-window.innerHeight;
     var want=(over<=40 || contentH()<=window.innerHeight+40);
     if(want===locked) return;
     locked=want;
     if(want){
       de.style.setProperty('overflow','hidden','important');
-      b.style.setProperty('overflow','hidden','important');
     } else {
       de.style.removeProperty('overflow');
-      b.style.removeProperty('overflow');
     }
   }
   lock();
-  setInterval(lock,4000);
+  setInterval(lock,10000);
 })();
 """
 
@@ -192,15 +201,22 @@ private const val LOCK_SCROLL_JS = """
  */
 private const val SCRAPE_JS = """
 (function(){
+  function txt(el){
+    var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null), n, out=[];
+    while((n=w.nextNode())){ out.push(n.nodeValue); }
+    return out.join(' ').replace(/\s+/g,' ').trim();
+  }
   try{
     var out=[], seen={};
     var rows=document.querySelectorAll('tr');
+    // Strony z dużymi tabelami (np. parametry pompy) nie są listą urządzeń: nie ruszamy ich.
+    if(rows.length>250) return '';
     for(var i=0;i<rows.length;i++){
       var cells=rows[i].querySelectorAll('td');
       if(cells.length<3) continue;
       var t=[];
       for(var j=0;j<cells.length;j++){
-        t.push((cells[j].innerText||cells[j].textContent||'').replace(/\s+/g,' ').trim());
+        t.push(txt(cells[j]));
       }
       var si=-1;
       for(var k=0;k<t.length;k++){ if(/^\d{6,12}$/.test(t[k])){ si=k; break; } }
@@ -241,12 +257,17 @@ private fun openPumpJs(serial: String): String {
     val sq = JSONObject.quote(serial)
     return """
 (function(serial){
+  function txt(el){
+    var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null), n, out=[];
+    while((n=w.nextNode())){ out.push(n.nodeValue); }
+    return out.join(' ').replace(/\s+/g,' ').trim();
+  }
   try{
     var rows=document.querySelectorAll('tr');
     for(var i=0;i<rows.length;i++){
       var cells=rows[i].querySelectorAll('td');
       for(var j=0;j<cells.length;j++){
-        var tx=(cells[j].innerText||cells[j].textContent||'').replace(/\s+/g,' ').trim();
+        var tx=txt(cells[j]);
         if(tx===serial){
           var a=rows[i].querySelector('a[href]');
           if(a){ a.click(); return 'clicked'; }
@@ -399,6 +420,7 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
     // Dane trafiają do PumpStore (ekran "Pompy ciepła").
     LaunchedEffect(web) {
         val w = web ?: return@LaunchedEffect
+        if (!ENABLE_SCRAPE) return@LaunchedEffect
         var gotFirst = false
         while (true) {
             delay(if (gotFirst) SCRAPE_SLOW_MS else SCRAPE_FAST_MS)
@@ -464,7 +486,13 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
 
                         webChromeClient = object : WebChromeClient() {
                             override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
-                                Log.d(TAG, "${msg.message()} @ ${msg.sourceId()}:${msg.lineNumber()}")
+                                // Logujemy tylko błędy strony i nasze komunikaty (IGL-AF): portal potrafi
+                                // wysyłać bardzo dużo komunikatów, a każdy to praca na wątku interfejsu.
+                                if (msg.messageLevel() == ConsoleMessage.MessageLevel.ERROR ||
+                                    msg.message().startsWith("IGL-AF")
+                                ) {
+                                    Log.d(TAG, "${msg.message()} @ ${msg.sourceId()}:${msg.lineNumber()}")
+                                }
                                 return true
                             }
                         }
@@ -483,9 +511,9 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView, url: String?) {
                                 if (!isIglu(url)) return
-                                view.evaluateJavascript(FIX_VH_JS, null)
-                                view.evaluateJavascript(FIX_BG_JS, null)
-                                view.evaluateJavascript(LOCK_SCROLL_JS, null)
+                                if (ENABLE_VH_FIX) view.evaluateJavascript(FIX_VH_JS, null)
+                                if (ENABLE_BG_FIX) view.evaluateJavascript(FIX_BG_JS, null)
+                                if (ENABLE_LOCK) view.evaluateJavascript(LOCK_SCROLL_JS, null)
                                 runAutofill(view)
                             }
 
