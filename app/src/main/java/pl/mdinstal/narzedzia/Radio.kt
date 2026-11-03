@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -61,7 +62,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.URLEncoder
 
-/** Odtwarzanie w tle: usługa pierwszoplanowa z powiadomieniem i sterowaniem z ekranu blokady. */
 class RadioService : MediaSessionService() {
     private var session: MediaSession? = null
 
@@ -97,6 +97,26 @@ class RadioService : MediaSessionService() {
         super.onDestroy()
     }
 }
+
+private enum class RadioTab { SEARCH, OPENFM, FAVORITES }
+
+private val OPENFM_STATIONS = listOf(
+    Station("Open FM – Tylko Hity", "https://stream.open.fm/4"),
+    Station("Open FM – Lata 80", "https://stream.open.fm/197"),
+    Station("Open FM – Lata 90", "https://stream.open.fm/198"),
+    Station("Open FM – Lata 2000", "https://stream.open.fm/199"),
+    Station("Open FM – Dance", "https://stream.open.fm/5"),
+    Station("Open FM – Disco Polo", "https://stream.open.fm/23"),
+    Station("Open FM – Rock", "https://stream.open.fm/8"),
+    Station("Open FM – Relax", "https://stream.open.fm/10"),
+    Station("Open FM – 500 Hitów", "https://stream.open.fm/100"),
+    Station("Open FM – Hip Hop", "https://stream.open.fm/6"),
+    Station("Open FM – R&B", "https://stream.open.fm/7"),
+    Station("Open FM – Jazz", "https://stream.open.fm/11"),
+    Station("Open FM – Classic Rock", "https://stream.open.fm/9"),
+    Station("Open FM – Metal", "https://stream.open.fm/22"),
+    Station("Open FM – Christmas", "https://stream.open.fm/238"),
+)
 
 private val RADIO_HOSTS = listOf(
     "https://de1.api.radio-browser.info",
@@ -136,6 +156,7 @@ fun RadioScreen(onBack: () -> Unit) {
     var onlyPl by remember { mutableStateOf(true) }
     var results by remember { mutableStateOf<List<Station>>(emptyList()) }
     var status by remember { mutableStateOf("") }
+    var activeTab by remember { mutableStateOf(RadioTab.SEARCH) }
     val favs = remember { mutableStateListOf<Station>().apply { addAll(Prefs.favorites(ctx)) } }
 
     var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -230,53 +251,141 @@ fun RadioScreen(onBack: () -> Unit) {
     }
 
     AppScaffold("Radio internetowe", onBack) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad).imePadding().padding(horizontal = 14.dp)) {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    placeholder = { Text("Szukaj stacji, np. Eska, RMF, Zet") },
-                    modifier = Modifier.weight(1f)
-                )
-                Button(onClick = { search() }, modifier = Modifier.align(Alignment.CenterVertically)) { Text("Szukaj") }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = onlyPl, onCheckedChange = { onlyPl = it })
-                Text("Tylko Polska", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(pad)
+                .consumeWindowInsets(pad)
+                .imePadding()
+                .padding(horizontal = 14.dp)
+        ) {
+            // ── ZAKŁADKI ──────────────────────────────────────────
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                RadioTab.entries.forEach { tab ->
+                    val label = when (tab) {
+                        RadioTab.SEARCH -> "🔍 Szukaj"
+                        RadioTab.OPENFM -> "🎵 Open FM"
+                        RadioTab.FAVORITES -> "★ Ulubione"
+                    }
+                    FilterChip(
+                        selected = activeTab == tab,
+                        onClick = { activeTab = tab },
+                        label = { Text(label) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
+            // ── PASEK ODTWARZANIA ─────────────────────────────────
             val name = nowName
             if (name != null) {
                 Row(
-                    Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primary)
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.primary)
                         .padding(horizontal = 12.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         (if (error) "⚠ Błąd: " else if (playing) "▶ " else "⏸ ") + name,
                         modifier = Modifier.weight(1f).clickable { togglePlay() },
-                        color = Color.White, fontWeight = FontWeight.SemiBold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     TextButton(onClick = { togglePlay() }) {
                         Text(if (playing) "❚❚" else "▶", color = Color.White, fontSize = 18.sp)
                     }
-                    TextButton(onClick = { stop() }) { Text("STOP", color = Color.White, fontWeight = FontWeight.Bold) }
+                    TextButton(onClick = { stop() }) {
+                        Text("STOP", color = Color.White, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item { SectionTitle("Ulubione") }
-                if (favs.isEmpty()) item { SubText("Brak. Dotknij ☆ przy stacji, żeby dodać.") }
-                items(favs.toList()) { s ->
-                    StationRow(s, isFav = true, onPlay = { play(s) }, onFav = { toggleFav(s) })
+            // ── ZAWARTOŚĆ ZAKŁADEK ────────────────────────────────
+            when (activeTab) {
+
+                RadioTab.SEARCH -> {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            placeholder = { Text("Szukaj stacji, np. Eska, RMF, Zet") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(
+                            onClick = { search() },
+                            modifier = Modifier.align(Alignment.CenterVertically)
+                        ) { Text("Szukaj") }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = onlyPl, onCheckedChange = { onlyPl = it })
+                        Text("Tylko Polska", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (status.isNotEmpty()) item { SubText(status) }
+                        items(results) { s ->
+                            StationRow(
+                                s,
+                                isFav = favs.any { it.url == s.url },
+                                onPlay = { play(s) },
+                                onFav = { toggleFav(s) }
+                            )
+                        }
+                    }
                 }
-                item { SectionTitle("Wyniki") }
-                if (status.isNotEmpty()) item { SubText(status) }
-                items(results) { s ->
-                    StationRow(s, isFav = favs.any { it.url == s.url }, onPlay = { play(s) }, onFav = { toggleFav(s) })
+
+                RadioTab.OPENFM -> {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        item { SubText("Stacje Open FM – kliknij aby odtworzyć") }
+                        items(OPENFM_STATIONS) { s ->
+                            StationRow(
+                                s,
+                                isFav = favs.any { it.url == s.url },
+                                onPlay = { play(s) },
+                                onFav = { toggleFav(s) }
+                            )
+                        }
+                    }
+                }
+
+                RadioTab.FAVORITES -> {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (favs.isEmpty()) {
+                            item { SubText("Brak ulubionych. Dotknij ☆ przy stacji, żeby dodać.") }
+                        }
+                        items(favs.toList()) { s ->
+                            StationRow(
+                                s,
+                                isFav = true,
+                                onPlay = { play(s) },
+                                onFav = { toggleFav(s) }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -292,7 +401,10 @@ private fun StationRow(s: Station, isFav: Boolean, onPlay: () -> Unit, onFav: ()
             }
             Text(
                 s.name,
-                modifier = Modifier.weight(1f).clickable { onPlay() }.padding(vertical = 12.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { onPlay() }
+                    .padding(vertical = 12.dp),
                 fontWeight = FontWeight.SemiBold,
                 fontSize = 16.sp,
                 maxLines = 1,
@@ -302,3 +414,4 @@ private fun StationRow(s: Station, isFav: Boolean, onPlay: () -> Unit, onFav: ()
         }
     }
 }
+```
