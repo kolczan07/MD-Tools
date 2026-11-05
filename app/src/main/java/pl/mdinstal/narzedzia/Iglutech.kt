@@ -65,10 +65,10 @@ private const val ENABLE_LOCK = true
 private const val ENABLE_SCRAPE = true
 
 /** Skala strony w poziomie (0.70 = 70%). Mniej = więcej mieści się na ekranie, tekst drobniejszy. */
-private const val LANDSCAPE_SCALE = 0.70f
+private const val LANDSCAPE_SCALE = 1.0f
 
 /** Skala strony w pionie (1.0 = bez zmian). */
-private const val VERTICAL_SCALE = 0.70f
+private const val VERTICAL_SCALE = 1.0f
 
 /**
  * Daje WebView większy obszar (rozmiar / scale), a sam widok jest potem pomniejszany o scale
