@@ -198,8 +198,9 @@ private const val LOCK_SCROLL_JS = """
 /**
  * Odczyt listy pomp z tabeli urządzeń (numer seryjny, model, partner, status Online/Offline, e-mail).
  * Zwraca tekst JSON (tablica) albo pusty tekst, gdy tabeli nie ma. Nic nie zmienia na stronie.
+ * To zapasowa ścieżka: główna idzie przez API (patrz IgluApi.kt, readPumps).
  */
-private const val SCRAPE_JS = """
+internal const val SCRAPE_JS = """
 (function(){
   function txt(el){
     var w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT,null), n, out=[];
@@ -242,7 +243,7 @@ private const val SCRAPE_JS = """
 """
 
 /** Wykonuje JS i zwraca wynik jako tekst (skrypty zwracają tekst). */
-private suspend fun WebView.evalJs(js: String): String? = suspendCancellableCoroutine { cont ->
+internal suspend fun WebView.evalJs(js: String): String? = suspendCancellableCoroutine { cont ->
     evaluateJavascript(js) { raw ->
         val s = try { JSONTokener(raw).nextValue() as? String } catch (e: Exception) { null }
         if (cont.isActive) cont.resume(s)
@@ -415,7 +416,7 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
         }
     }
 
-    // Odczytuje listę pomp ze strony, gdy WebView jest na stronie Iglutech i widać tabelę urządzeń:
+    // Odczytuje listę pomp (przez API, a zapasowo ze strony), gdy WebView jest na stronie Iglutech:
     // co kilka sekund do pierwszego udanego odczytu, potem raz na minutę.
     // Dane trafiają do PumpStore (ekran "Pompy ciepła").
     LaunchedEffect(web) {
@@ -426,7 +427,7 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
             delay(if (gotFirst) SCRAPE_SLOW_MS else SCRAPE_FAST_MS)
             try {
                 if (isIglu(w.url)) {
-                    val json = w.evalJs(SCRAPE_JS)
+                    val json = w.readPumps()
                     if (!json.isNullOrBlank() && PumpStore.merge(ctx, json) > 0) gotFirst = true
                 }
             } catch (e: Exception) {
@@ -563,8 +564,8 @@ fun IglutechScreen(onBack: () -> Unit, openSerial: String? = null) {
 
 /**
  * Niewidoczna synchronizacja listy pomp po starcie aplikacji. Ładuje portal w WebView ukrytym
- * pod interfejsem (sesja z ciasteczek, bez wpisywania hasła), odczytuje tabelę urządzeń i kończy.
- * Gdy sesja wygasła i portal pokazuje logowanie, kończy ze stanem "login".
+ * pod interfejsem (sesja z ciasteczek, bez wpisywania hasła), odczytuje listę urządzeń (przez API,
+ * a zapasowo z tabeli) i kończy. Gdy sesja wygasła i portal pokazuje logowanie, kończy ze stanem "login".
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -610,7 +611,7 @@ fun PumpSyncView(onDone: () -> Unit) {
                 state = "login"
                 break
             }
-            val json = try { w.evalJs(SCRAPE_JS) } catch (e: Exception) { null }
+            val json = try { w.readPumps() } catch (e: Exception) { null }
             if (!json.isNullOrBlank() && PumpStore.merge(ctx, json) > 0) {
                 state = "ok"
                 break
