@@ -40,19 +40,36 @@ data class UpdateInfo(val version: String, val url: String, val notes: String, v
 object Updater {
     private const val REPO = "kolczan07/MD-Tools"
 
-    /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
-    fun latest(): UpdateInfo? {
+    /**
+     * Wybiera plik APK z najnowszego wydania. debug = true: plik z "debug" w nazwie.
+     * debug = false: zwykły plik (bez "debug" w nazwie); gdy takiego nie ma, pierwszy APK.
+     */
+    private fun pick(debug: Boolean): UpdateInfo? {
         val json = JSONObject(Http.get("https://api.github.com/repos/$REPO/releases/latest"))
         val tag = json.optString("tag_name").removePrefix("v").removePrefix("V")
         val assets = json.optJSONArray("assets") ?: return null
+        var fallback: UpdateInfo? = null
         for (i in 0 until assets.length()) {
             val a = assets.getJSONObject(i)
-            if (a.optString("name").endsWith(".apk", ignoreCase = true)) {
-                return UpdateInfo(tag, a.getString("browser_download_url"), json.optString("body"), a.optLong("size"))
+            val name = a.optString("name")
+            if (!name.endsWith(".apk", ignoreCase = true)) continue
+            val info = UpdateInfo(tag, a.getString("browser_download_url"), json.optString("body"), a.optLong("size"))
+            val isDebug = name.contains("debug", ignoreCase = true)
+            if (debug) {
+                if (isDebug) return info
+            } else {
+                if (!isDebug) return info
+                if (fallback == null) fallback = info
             }
         }
-        return null
+        return if (debug) null else fallback
     }
+
+    /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
+    fun latest(): UpdateInfo? = pick(false)
+
+    /** Blokujące: wywołuj na wątku IO. null = najnowsze wydanie nie ma pliku APK z "debug" w nazwie. */
+    fun latestDebug(): UpdateInfo? = pick(true)
 
     /** Porównuje wersje semantycznie: "3.3" vs "3.2" → true. */
     fun isNewer(remote: String, local: String): Boolean {
@@ -204,4 +221,48 @@ fun UpdateCard() {
         }
     }
     found?.let { UpdateDialog(it) { found = null } }
+}
+
+/** Karta w "O aplikacji": pobiera plik APK z "debug" w nazwie z najnowszego wydania i uruchamia instalację. */
+@Composable
+fun DebugDownloadCard(modifier: Modifier = Modifier) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("Najnowsza wersja z diagnostyką, z najnowszego wydania na GitHubie") }
+
+    AppCard(modifier.fillMaxWidth(), onClick = {
+        if (busy) return@AppCard
+        if (!Updater.canInstall(ctx)) {
+            status = "Zezwól tej aplikacji na instalowanie, wróć i kliknij ponownie."
+            Updater.openInstallPermission(ctx)
+            return@AppCard
+        }
+        busy = true
+        status = "Szukam pliku debug…"
+        scope.launch {
+            try {
+                val info = withContext(Dispatchers.IO) { Updater.latestDebug() }
+                if (info == null) {
+                    status = "Najnowsze wydanie nie ma pliku APK z „debug” w nazwie."
+                } else {
+                    status = "Pobieranie… 0%"
+                    val f = withContext(Dispatchers.IO) {
+                        Updater.download(ctx, info) { p -> status = "Pobieranie wersji ${info.version}… $p%" }
+                    }
+                    status = if (Updater.install(ctx, f)) "Pobrano. Potwierdź instalację w oknie Androida."
+                    else "Zezwól na instalację i kliknij ponownie."
+                }
+            } catch (e: Exception) {
+                status = "Nie udało się pobrać (${e.message ?: "brak sieci"})."
+            } finally {
+                busy = false
+            }
+        }
+    }) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Pobierz wersję debug", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            SubText(status)
+        }
+    }
 }
