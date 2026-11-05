@@ -558,7 +558,7 @@ private fun FieldRow(p: Param, d: Detail, editable: Boolean, locked: Boolean, on
         }
         if (locked) {
             Text(
-                "edycja zablokowana (brak limitu w pliku rejestrów albo parametr tylko do odczytu)",
+                "harmonogram: edycja wyłączona",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp)
@@ -579,8 +579,14 @@ private fun FieldRow(p: Param, d: Detail, editable: Boolean, locked: Boolean, on
 /** Grupy parametrów serwisowych/instalacyjnych: przy ich zmianie pokazujemy mocniejsze ostrzeżenie. */
 private val SENSITIVE_GROUPS = setOf("Manufacture", "Installation", "Service")
 
-/** Czy parametr można zmieniać z aplikacji: tak, gdy API podaje go jako RW (limity z ParamLimits sprawdzamy w oknie edycji). */
-private fun canEdit(p: Param): Boolean = p.access == "RW"
+/** Harmonogram tygodniowy (ScheduleS1Period1, ScheduleS1Period1Mode, ScheduleS1Weekdays, ScheduleTemperatures...). */
+private fun isSchedule(p: Param): Boolean = p.keyword.startsWith("Schedule")
+
+/**
+ * Czy parametr można zmieniać z aplikacji: tak, gdy API podaje go jako RW (limity z ParamLimits sprawdzamy w oknie edycji).
+ * Wyjątek: parametry harmonogramu, bo ich kodowanie jest nieznane i nie są u nas używane.
+ */
+private fun canEdit(p: Param): Boolean = p.access == "RW" && !isSchedule(p)
 
 private fun sameValue(a: Any?, b: Any?): Boolean {
     if (a == null || b == null) return a == b
