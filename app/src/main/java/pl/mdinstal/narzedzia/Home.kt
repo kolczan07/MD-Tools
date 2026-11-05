@@ -39,7 +39,7 @@ private data class Tile(val icon: String, val title: String, val desc: String, v
 
 private val tools = listOf(
     Tile("📻", "Radio internetowe", "Wyszukiwarka stacji, ulubione, gra w tle", Screen.Radio),
-    Tile("📶", "Sieć", "Speed Test, Skaner WiFi", Screen.Network),
+    Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN, ARP", Screen.Network),
     Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
     Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null),
     Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts)
