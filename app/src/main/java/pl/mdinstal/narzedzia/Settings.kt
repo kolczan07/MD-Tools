@@ -113,6 +113,7 @@ fun AboutScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(top = 8.dp),
                 color = MaterialTheme.colorScheme.onBackground
             )
+            DebugDownloadCard(Modifier.padding(top = 20.dp))
             SubText("© MD-INSTAL", Modifier.padding(top = 24.dp))
         }
     }
