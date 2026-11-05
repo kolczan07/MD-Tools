@@ -117,6 +117,15 @@ object PumpStore {
         return Pair(p.getString(KEY_SYNC, "") ?: "", p.getLong(KEY_SYNC_AT, 0L))
     }
 
+    private const val KEY_DIAG = "diag"
+
+    /** Krótki opis, skąd pochodzi ostatni odczyt listy (API albo tabela) i dlaczego API nie zadziałało. */
+    fun setDiag(ctx: Context, text: String) {
+        prefs(ctx).edit().putString(KEY_DIAG, text).apply()
+    }
+
+    fun diag(ctx: Context): String = prefs(ctx).getString(KEY_DIAG, "") ?: ""
+
     fun clear(ctx: Context) {
         prefs(ctx).edit().clear().apply()
     }
