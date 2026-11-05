@@ -141,6 +141,7 @@ fun SchematicScreen(onBack: () -> Unit) {
 @Composable
 fun ProtocolScreen(onBack: () -> Unit) {
     val data = FormStore.protocol
+    val ctx = LocalContext.current
     var confirmClear by remember { mutableStateOf(false) }
 
     AppScaffold(
@@ -188,6 +189,29 @@ fun ProtocolScreen(onBack: () -> Unit) {
             for (sg in ProtocolSpec.signatures) {
                 LabeledField(sg.label, data[sg.id].orEmpty(), { data[sg.id] = it })
             }
+
+            SectionTitle("GWARANCJA (WORD)")
+            SubText("Numer seryjny i adres są brane z protokołu powyżej. Pola poniżej trafiają tylko do gwarancji.")
+            LabeledField("Imię i nazwisko klienta:", data["client_name"].orEmpty(), { data["client_name"] = it })
+            LabeledField("Data na gwarancji:", data["warranty_date"] ?: Gwarancja.today(), { data["warranty_date"] = it })
+            Button(
+                onClick = {
+                    val name = data["client_name"].orEmpty().trim()
+                    val serial = data["serial"].orEmpty().trim()
+                    when {
+                        name.isEmpty() -> Toast.makeText(ctx, "Wpisz imię i nazwisko klienta", Toast.LENGTH_LONG).show()
+                        serial.isEmpty() -> Toast.makeText(ctx, "Wpisz numer seryjny pompy ciepła", Toast.LENGTH_LONG).show()
+                        else -> try {
+                            val date = (data["warranty_date"] ?: Gwarancja.today()).ifBlank { Gwarancja.today() }
+                            val zip = Gwarancja.buildZip(ctx, name, serial, date, data["address"].orEmpty())
+                            Gwarancja.share(ctx, zip)
+                        } catch (e: Exception) {
+                            Toast.makeText(ctx, "Nie udało się utworzyć paczki: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) { Text("Utwórz ZIP i udostępnij") }
 
             PdfActions("Protokol_uruchomienia", landscape = false) { PdfUtil.protocol(it) }
         }
