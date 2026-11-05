@@ -143,6 +143,8 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 Screen.Network -> NetworkScreen(onBack = { back() }, onOpen = { go(it) })
                 Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
                 Screen.Wifi -> WifiScreen(onBack = { back() })
+                Screen.Lan -> LanScreen(onBack = { back() })
+                Screen.Arp -> ArpScreen(onBack = { back() })
                 Screen.Weather -> WeatherScreen(onBack = { back() })
                 Screen.Iglutech -> IglutechScreen(onBack = { back() }, openSerial = pendingSerial)
                 Screen.Shortcuts -> ShortcutsScreen(onBack = { back() })
