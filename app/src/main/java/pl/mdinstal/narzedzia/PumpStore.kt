@@ -13,7 +13,9 @@ data class Pump(
     /** Adresy e-mail z wiersza tabeli (rozdzielone przecinkami), jeśli portal je pokazuje. */
     val email: String = "",
     /** Kiedy ostatnio widziana na liście w portalu (ms). */
-    val seen: Long
+    val seen: Long,
+    /** Wewnętrzny identyfikator pompy w API Iglutech (0 = nieznany, np. lista z samej tabeli). */
+    val id: Long = 0L
 ) {
     val online: Boolean get() = status.equals("online", ignoreCase = true)
 }
@@ -40,7 +42,8 @@ object PumpStore {
                     status = o.optString("status"),
                     since = o.optString("since"),
                     email = o.optString("email"),
-                    seen = o.optLong("seen")
+                    seen = o.optLong("seen"),
+                    id = o.optLong("id")
                 )
             }.filter { it.serial.isNotBlank() }.sortedBy { it.serial }
         } catch (e: Exception) {
@@ -74,7 +77,9 @@ object PumpStore {
                 since = o.optString("since"),
                 // Gdy w odczycie nie ma adresu (np. węższy układ strony), zostaje zapisany wcześniej.
                 email = o.optString("email").ifBlank { old[serial]?.email ?: "" },
-                seen = now
+                seen = now,
+                // Odczyt z samej tabeli nie zna id: zostaje to zapisane wcześniej z API.
+                id = o.optLong("id").takeIf { it > 0L } ?: old[serial]?.id ?: 0L
             )
             val prev = old[serial]
             if (prev == null || prev.copy(seen = 0) != p.copy(seen = 0)) changed = true
@@ -99,6 +104,7 @@ object PumpStore {
                     .put("since", it.since)
                     .put("email", it.email)
                     .put("seen", it.seen)
+                    .put("id", it.id)
             )
         }
         prefs(ctx).edit().putString(KEY_LIST, a.toString()).putLong(KEY_UPDATED, now).apply()
