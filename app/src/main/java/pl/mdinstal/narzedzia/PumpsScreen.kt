@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -45,6 +46,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
     var pumps by remember { mutableStateOf(PumpStore.load(ctx)) }
     var updated by remember { mutableStateOf(PumpStore.updatedAt(ctx)) }
     var sync by remember { mutableStateOf(PumpStore.syncState(ctx)) }
+    var diag by remember { mutableStateOf(PumpStore.diag(ctx)) }
     var query by remember { mutableStateOf("") }
     var confirmClear by remember { mutableStateOf(false) }
 
@@ -54,6 +56,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
             pumps = PumpStore.load(ctx)
             updated = PumpStore.updatedAt(ctx)
             sync = PumpStore.syncState(ctx)
+            diag = PumpStore.diag(ctx)
             delay(2000)
         }
     }
@@ -99,6 +102,16 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
             }
             if (syncText != null) {
                 Text(syncText, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // Skąd pochodzą dane (API albo tabela ze strony) i dlaczego API nie zadziałało. Da się zaznaczyć i skopiować.
+            if (diag.isNotBlank()) {
+                SelectionContainer {
+                    Text(
+                        "Źródło danych: $diag",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
             Row(
@@ -147,6 +160,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
                     PumpStore.clear(ctx)
                     pumps = emptyList()
                     updated = 0L
+                    diag = ""
                     confirmClear = false
                 }) { Text("Wyczyść") }
             },
