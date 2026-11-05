@@ -63,6 +63,7 @@ import org.json.JSONArray
 import java.net.URLEncoder
 
 class RadioService : MediaSessionService() {
+
     private var session: MediaSession? = null
 
     override fun onCreate() {
@@ -98,25 +99,7 @@ class RadioService : MediaSessionService() {
     }
 }
 
-private enum class RadioTab { SEARCH, OPENFM, FAVORITES }
-
-private val OPENFM_STATIONS = listOf(
-    Station("Open FM – Tylko Hity", "https://stream.open.fm/4"),
-    Station("Open FM – Lata 80", "https://stream.open.fm/197"),
-    Station("Open FM – Lata 90", "https://stream.open.fm/198"),
-    Station("Open FM – Lata 2000", "https://stream.open.fm/199"),
-    Station("Open FM – Dance", "https://stream.open.fm/5"),
-    Station("Open FM – Disco Polo", "https://stream.open.fm/23"),
-    Station("Open FM – Rock", "https://stream.open.fm/8"),
-    Station("Open FM – Relax", "https://stream.open.fm/10"),
-    Station("Open FM – 500 Hitów", "https://stream.open.fm/100"),
-    Station("Open FM – Hip Hop", "https://stream.open.fm/6"),
-    Station("Open FM – R&B", "https://stream.open.fm/7"),
-    Station("Open FM – Jazz", "https://stream.open.fm/11"),
-    Station("Open FM – Classic Rock", "https://stream.open.fm/9"),
-    Station("Open FM – Metal", "https://stream.open.fm/22"),
-    Station("Open FM – Christmas", "https://stream.open.fm/238"),
-)
+private enum class RadioTab { SEARCH, FAVORITES }
 
 private val RADIO_HOSTS = listOf(
     "https://de1.api.radio-browser.info",
@@ -269,7 +252,6 @@ fun RadioScreen(onBack: () -> Unit) {
                 RadioTab.entries.forEach { tab ->
                     val label = when (tab) {
                         RadioTab.SEARCH -> "🔍 Szukaj"
-                        RadioTab.OPENFM -> "🎵 Open FM"
                         RadioTab.FAVORITES -> "★ Ulubione"
                     }
                     FilterChip(
@@ -312,7 +294,6 @@ fun RadioScreen(onBack: () -> Unit) {
 
             // ── ZAWARTOŚĆ ZAKŁADEK ────────────────────────────────
             when (activeTab) {
-
                 RadioTab.SEARCH -> {
                     Row(
                         Modifier
@@ -342,23 +323,6 @@ fun RadioScreen(onBack: () -> Unit) {
                     ) {
                         if (status.isNotEmpty()) item { SubText(status) }
                         items(results) { s ->
-                            StationRow(
-                                s,
-                                isFav = favs.any { it.url == s.url },
-                                onPlay = { play(s) },
-                                onFav = { toggleFav(s) }
-                            )
-                        }
-                    }
-                }
-
-                RadioTab.OPENFM -> {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        item { SubText("Stacje Open FM – kliknij aby odtworzyć") }
-                        items(OPENFM_STATIONS) { s ->
                             StationRow(
                                 s,
                                 isFav = favs.any { it.url == s.url },
