@@ -6,7 +6,9 @@ import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,17 +18,19 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -40,12 +44,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.util.Locale
 
 private const val DETAIL_PORTAL_URL = "https://service.iglutech.eu"
 
 /** Opis jednego parametru z config/render. */
 private class Param(
     val keyword: String,
+    val valueType: String,
+    val inputType: String,
+    val scale: Double,
     val units: String,
     val access: String,
     val group: String,
@@ -101,6 +109,9 @@ private fun loadDetail(p: Pump, token: String): Detail {
         params.add(
             Param(
                 keyword = o.s("keyword"),
+                valueType = o.s("valueType"),
+                inputType = o.s("inputType"),
+                scale = o.optDouble("scale", 1.0),
                 units = o.s("units"),
                 access = o.s("access"),
                 group = g?.s("name") ?: "Inne",
@@ -126,13 +137,25 @@ private fun loadDetail(p: Pump, token: String): Detail {
     )
 }
 
-/** Wartość do wyświetlenia: opis z listy, Tak/Nie dla logicznych, liczba z jednostką. */
-private fun fmt(v: Any?, p: Param): String {
+/** Liczba miejsc po przecinku wynika z kroku pola (scale): 0.1 -> 1, 0.01 -> 2 itd. */
+private fun decimals(scale: Double): Int = when {
+    scale <= 0.0001 -> 4
+    scale <= 0.001 -> 3
+    scale <= 0.01 -> 2
+    scale <= 0.1 -> 1
+    else -> 0
+}
+
+/** Wartość do wyświetlenia w polu (bez jednostki): opis z listy, Tak/Nie dla logicznych, liczba jak na portalu. */
+private fun valueText(v: Any?, p: Param): String {
     if (v == null) return "—"
     val raw = v.toString()
-    p.range[raw]?.let { return it }
-    if (v is Boolean) return if (v) "Tak" else "Nie"
-    return if (p.units.isBlank()) raw else "$raw ${p.units}"
+    p.range[raw]?.trim()?.let { return it }
+    if (v is Boolean) return if (v) "☑ Tak" else "☐ Nie"
+    if (p.valueType == "decimal" && v is Number) {
+        return String.format(Locale.US, "%.${decimals(p.scale)}f", v.toDouble())
+    }
+    return raw
 }
 
 /**
@@ -199,7 +222,6 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var reload by remember { mutableStateOf(0) }
     var query by remember { mutableStateOf("") }
-    val expanded = remember { mutableStateMapOf<String, Boolean>() }
 
     LaunchedEffect(tokenOk, reload) {
         if (!tokenOk || pump.id <= 0L) return@LaunchedEffect
@@ -285,7 +307,6 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                         error = error,
                         query = query,
                         onQuery = { query = it },
-                        expanded = expanded,
                         onRefresh = { reload++ },
                         onOpenPortal = onOpenPortal
                     )
@@ -303,19 +324,25 @@ private fun DetailBody(
     error: String?,
     query: String,
     onQuery: (String) -> Unit,
-    expanded: MutableMap<String, Boolean>,
     onRefresh: () -> Unit,
     onOpenPortal: () -> Unit
 ) {
     val q = query.trim().lowercase()
-    val groups = remember(d, q) {
+    val groups = remember(d) {
         d.params
-            .filter { d.current.containsKey(it.keyword) && (q.isEmpty() || it.keyword.lowercase().contains(q)) }
+            .filter { d.current.containsKey(it.keyword) }
             .groupBy { it.group }
             .entries
             .sortedBy { e -> e.value.first().groupOrder }
             .map { e -> e.key to e.value.sortedBy { it.order } }
     }
+    var selected by remember(pump.serial) { mutableStateOf<String?>(null) }
+    val active = groups.firstOrNull { it.first == selected }?.first
+        ?: groups.firstOrNull { it.first == "UserSettings" }?.first
+        ?: groups.firstOrNull()?.first
+    val shown: List<Param> =
+        if (q.isNotEmpty()) groups.flatMap { it.second }.filter { it.keyword.lowercase().contains(q) }
+        else groups.firstOrNull { it.first == active }?.second.orEmpty()
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
@@ -356,60 +383,102 @@ private fun DetailBody(
             OutlinedTextField(
                 value = query,
                 onValueChange = onQuery,
-                label = { Text("Szukaj parametru") },
+                label = { Text("Szukaj parametru (we wszystkich grupach)") },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
             )
         }
-        groups.forEach { (name, list) ->
-            val open = q.isNotEmpty() || expanded[name] == true
-            item(key = "g_$name") {
+        if (q.isEmpty()) {
+            // Zakładki grup jak na portalu (przewijane w bok).
+            item {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { expanded[name] = !open }
-                        .padding(vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        (if (open) "▼ " else "▶ ") + name,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text("${list.size}", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            }
-            if (open) {
-                items(list, key = { "p_" + it.keyword }) { p ->
-                    val cur = d.current[p.keyword]
-                    val des = d.desired[p.keyword]
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    groups.forEach { (name, list) ->
+                        val on = name == active
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier.clickable { selected = name }
+                        ) {
                             Text(
-                                p.keyword + if (p.access == "R") "  (tylko odczyt)" else "",
-                                fontSize = 13.sp,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(fmt(cur, p), fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                        }
-                        // Gdy zadana wartość różni się od aktualnej, pokazujemy ją pod spodem.
-                        if (des != null && des.toString() != cur?.toString()) {
-                            Text(
-                                "zadane: ${fmt(des, p)}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                "$name (${list.size})",
+                                fontSize = 14.sp,
+                                fontWeight = if (on) FontWeight.Bold else FontWeight.Normal,
+                                color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)
                             )
                         }
                     }
                 }
             }
+            item {
+                Text(
+                    active ?: "",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 22.sp,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+            }
+        }
+        items(shown, key = { "p_" + it.keyword }) { p -> FieldRow(p, d) }
+    }
+}
+
+/** Jedno pole parametru jak na portalu: podpis z jednostką, pod nim wartość w ramce (tylko odczyt). */
+@Composable
+private fun FieldRow(p: Param, d: Detail) {
+    val cur = d.current[p.keyword]
+    val des = d.desired[p.keyword]
+    val readOnly = p.access == "R"
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 14.dp)
+    ) {
+        Text(
+            p.keyword + if (p.units.isNotBlank()) " (${p.units})" else "",
+            fontSize = 14.sp
+        )
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp)
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                valueText(cur, p),
+                fontSize = 16.sp,
+                color = if (readOnly) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            if (p.inputType == "Select") {
+                Text("▾", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (readOnly) {
+                Text(
+                    "  tylko odczyt",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        // Gdy zadana wartość różni się od aktualnej, pokazujemy ją pod spodem.
+        if (des != null && des.toString() != cur?.toString()) {
+            Text(
+                "zadane: ${valueText(des, p)}",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }
