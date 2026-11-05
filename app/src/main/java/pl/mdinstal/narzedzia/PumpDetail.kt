@@ -20,12 +20,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,15 +37,18 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.util.Locale
@@ -222,6 +229,12 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var reload by remember { mutableStateOf(0) }
     var query by remember { mutableStateOf("") }
+    // Edycja jest domyślnie wyłączona i znika po wyjściu z ekranu.
+    var editMode by remember(pump.serial) { mutableStateOf(false) }
+    var confirmEdit by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Param?>(null) }
+    var saveMsg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(tokenOk, reload) {
         if (!tokenOk || pump.id <= 0L) return@LaunchedEffect
@@ -308,11 +321,58 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                         query = query,
                         onQuery = { query = it },
                         onRefresh = { reload++ },
-                        onOpenPortal = onOpenPortal
+                        onOpenPortal = onOpenPortal,
+                        editMode = editMode,
+                        onToggleEdit = { if (editMode) editMode = false else confirmEdit = true },
+                        onEdit = { editing = it },
+                        saveMsg = saveMsg
                     )
                 }
             }
         }
+    }
+
+    if (confirmEdit) {
+        AlertDialog(
+            onDismissRequest = { confirmEdit = false },
+            title = { Text("Włączyć edycję parametrów?") },
+            text = {
+                Text(
+                    "Zmiany są wysyłane do prawdziwej pompy (${pump.serial}). Każdą zmianę potwierdzisz osobno. " +
+                        "Aplikacja nie zna limitów wartości, pilnuje ich tylko serwer Iglutech."
+                )
+            },
+            confirmButton = { TextButton(onClick = { editMode = true; confirmEdit = false }) { Text("Włącz") } },
+            dismissButton = { TextButton(onClick = { confirmEdit = false }) { Text("Anuluj") } }
+        )
+    }
+
+    val ep = editing
+    val dnow = detail
+    if (ep != null && dnow != null) {
+        EditDialog(
+            p = ep,
+            current = dnow.current[ep.keyword],
+            onDismiss = { editing = null },
+            onSave = { value ->
+                editing = null
+                val token = IgluToken.token
+                if (token == null) {
+                    saveMsg = "Brak tokenu, odśwież ekran i spróbuj ponownie."
+                } else {
+                    scope.launch {
+                        saveMsg = "Wysyłanie…"
+                        try {
+                            withContext(Dispatchers.IO) { IgluApi.setParam(pump.id, ep.keyword, value, token) }
+                            saveMsg = "Wysłano: ${ep.keyword} = $value. Pompa zastosuje zmianę po chwili (zobacz „zadane”)."
+                            reload++
+                        } catch (e: Exception) {
+                            saveMsg = "Błąd zapisu: ${e.message}"
+                        }
+                    }
+                }
+            }
+        )
     }
 }
 
@@ -325,7 +385,11 @@ private fun DetailBody(
     query: String,
     onQuery: (String) -> Unit,
     onRefresh: () -> Unit,
-    onOpenPortal: () -> Unit
+    onOpenPortal: () -> Unit,
+    editMode: Boolean,
+    onToggleEdit: () -> Unit,
+    onEdit: (Param) -> Unit,
+    saveMsg: String?
 ) {
     val q = query.trim().lowercase()
     val groups = remember(d) {
@@ -367,6 +431,16 @@ private fun DetailBody(
                     )
                     if (error != null) {
                         Text("Błąd odświeżania: $error", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                    if (saveMsg != null) {
+                        Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = editMode, onCheckedChange = { onToggleEdit() })
+                        Text(
+                            if (editMode) "  Edycja włączona (dotknij pola z ✎)" else "  Edycja parametrów wyłączona",
+                            fontSize = 14.sp
+                        )
                     }
                     Row(
                         Modifier.padding(top = 8.dp),
@@ -427,13 +501,13 @@ private fun DetailBody(
                 )
             }
         }
-        items(shown, key = { "p_" + it.keyword }) { p -> FieldRow(p, d) }
+        items(shown, key = { "p_" + it.keyword }) { p -> FieldRow(p, d, editMode && p.access == "RW") { onEdit(p) } }
     }
 }
 
 /** Jedno pole parametru jak na portalu: podpis z jednostką, pod nim wartość w ramce (tylko odczyt). */
 @Composable
-private fun FieldRow(p: Param, d: Detail) {
+private fun FieldRow(p: Param, d: Detail, editable: Boolean, onEdit: () -> Unit) {
     val cur = d.current[p.keyword]
     val des = d.desired[p.keyword]
     val readOnly = p.access == "R"
@@ -450,7 +524,12 @@ private fun FieldRow(p: Param, d: Detail) {
             Modifier
                 .fillMaxWidth()
                 .padding(top = 4.dp)
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                .border(
+                    if (editable) 2.dp else 1.dp,
+                    if (editable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    RoundedCornerShape(8.dp)
+                )
+                .then(if (editable) Modifier.clickable { onEdit() } else Modifier)
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -462,6 +541,9 @@ private fun FieldRow(p: Param, d: Detail) {
             )
             if (p.inputType == "Select") {
                 Text("▾", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (editable) {
+                Text("  ✎", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
             }
             if (readOnly) {
                 Text(
@@ -481,4 +563,85 @@ private fun FieldRow(p: Param, d: Detail) {
             )
         }
     }
+}
+
+/** Grupy parametrów serwisowych/instalacyjnych: przy ich zmianie pokazujemy mocniejsze ostrzeżenie. */
+private val SENSITIVE_GROUPS = setOf("Manufacture", "Installation", "Service")
+
+private fun sameValue(a: Any?, b: Any?): Boolean {
+    if (a == null || b == null) return a == b
+    if (a is Number && b is Number) return a.toDouble() == b.toDouble()
+    return a.toString() == b.toString()
+}
+
+/** Liczba do wysłania: całkowita jako Long (np. 61), inaczej Double (np. 23.5). */
+private fun numberOut(d: Double): Any = if (d == Math.floor(d) && Math.abs(d) < 1e12) d.toLong() else d
+
+/**
+ * Okno zmiany jednego parametru: pole liczbowe albo lista opcji (Tak/Nie i listy z portalu).
+ * Pokazuje starą i nową wartość, wysyła dopiero po dotknięciu przycisku.
+ */
+@Composable
+private fun EditDialog(p: Param, current: Any?, onDismiss: () -> Unit, onSave: (Any) -> Unit) {
+    val isBool = p.valueType == "boolean"
+    val options: List<Pair<String, String>> = when {
+        p.range.isNotEmpty() -> p.range.entries.map { it.key to it.value.trim() }
+        isBool -> listOf("true" to "Tak", "false" to "Nie")
+        else -> emptyList()
+    }
+    var text by remember { mutableStateOf(current?.toString().orEmpty()) }
+    var choice by remember { mutableStateOf(current?.toString()) }
+
+    val newValue: Any? = if (options.isNotEmpty()) {
+        choice?.let { c -> if (isBool) c.toBooleanStrictOrNull() else (c.toDoubleOrNull()?.let { numberOut(it) } ?: c) }
+    } else {
+        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }?.let { numberOut(it) }
+    }
+    val changed = newValue != null && !sameValue(newValue, current)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(p.keyword + if (p.units.isNotBlank()) " (${p.units})" else "") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Aktualnie: ${valueText(current, p)}", fontSize = 14.sp)
+                if (options.isNotEmpty()) {
+                    options.forEach { (v, label) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { choice = v },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(selected = choice == v, onClick = { choice = v })
+                            Text(label, fontSize = 15.sp)
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        label = { Text("Nowa wartość" + if (p.units.isNotBlank()) " (${p.units})" else "") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (changed && newValue != null) {
+                    Text("Nowa: ${valueText(newValue, p)}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
+                if (p.group in SENSITIVE_GROUPS) {
+                    Text(
+                        "To parametr serwisowy/instalacyjny. Zmiana może wpłynąć na pracę pompy.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = changed, onClick = { newValue?.let { onSave(it) } }) { Text("Wyślij do pompy") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } }
+    )
 }
