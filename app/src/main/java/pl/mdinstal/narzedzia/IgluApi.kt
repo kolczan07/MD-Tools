@@ -135,6 +135,33 @@ object IgluApi {
     fun state(id: Long, token: String): JSONObject =
         JSONObject(get("$BASE/devices/$id/state", token)).getJSONObject("data")
 
+    /**
+     * Zmiana jednego parametru: POST devices/{id}/state z treścią {"parameters":{"Słowo":wartość}}
+     * (tak robi portal). Serwer odpowiada 200 bez treści, zadana wartość pojawia się w desiredState,
+     * a currentState zmienia się, gdy pompa zastosuje zmianę. Wartość: Boolean albo liczba (Long / Double).
+     */
+    fun setParam(id: Long, keyword: String, value: Any, token: String) {
+        val body = JSONObject().put("parameters", JSONObject().put(keyword, value)).toString()
+        val c = URL("$BASE/devices/$id/state").openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.doOutput = true
+        c.connectTimeout = 10_000
+        c.readTimeout = 20_000
+        c.setRequestProperty("Authorization", "Bearer $token")
+        c.setRequestProperty("Accept", "application/json")
+        c.setRequestProperty("Content-Type", "application/json")
+        c.setRequestProperty("User-Agent", "MD-Tools/3.1")
+        try {
+            c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            if (c.responseCode !in 200..299) {
+                val err = try { c.errorStream?.bufferedReader()?.use { it.readText() } } catch (e: Exception) { null }
+                throw IOException("HTTP ${c.responseCode}" + (if (err.isNullOrBlank()) "" else " " + err.take(200)))
+            }
+        } finally {
+            c.disconnect()
+        }
+    }
+
     /** Opis parametrów (słowo kluczowe, jednostka, dostęp RW/R, grupa, lista wartości). Po numerze seryjnym. */
     fun config(serial: String, token: String): JSONArray =
         JSONObject(get("$BASE/devices/$serial/config/render", token)).getJSONArray("parameters")
