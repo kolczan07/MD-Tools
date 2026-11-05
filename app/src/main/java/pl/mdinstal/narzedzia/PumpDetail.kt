@@ -501,13 +501,16 @@ private fun DetailBody(
                 )
             }
         }
-        items(shown, key = { "p_" + it.keyword }) { p -> FieldRow(p, d, editMode && p.access == "RW") { onEdit(p) } }
+        items(shown, key = { "p_" + it.keyword }) { p ->
+            val editable = editMode && canEdit(p)
+            FieldRow(p, d, editable, locked = editMode && p.access == "RW" && !editable) { onEdit(p) }
+        }
     }
 }
 
 /** Jedno pole parametru jak na portalu: podpis z jednostką, pod nim wartość w ramce (tylko odczyt). */
 @Composable
-private fun FieldRow(p: Param, d: Detail, editable: Boolean, onEdit: () -> Unit) {
+private fun FieldRow(p: Param, d: Detail, editable: Boolean, locked: Boolean, onEdit: () -> Unit) {
     val cur = d.current[p.keyword]
     val des = d.desired[p.keyword]
     val readOnly = p.access == "R"
@@ -553,6 +556,14 @@ private fun FieldRow(p: Param, d: Detail, editable: Boolean, onEdit: () -> Unit)
                 )
             }
         }
+        if (locked) {
+            Text(
+                "edycja zablokowana (brak limitu w pliku rejestrów albo parametr tylko do odczytu)",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
         // Gdy zadana wartość różni się od aktualnej, pokazujemy ją pod spodem.
         if (des != null && des.toString() != cur?.toString()) {
             Text(
@@ -567,6 +578,9 @@ private fun FieldRow(p: Param, d: Detail, editable: Boolean, onEdit: () -> Unit)
 
 /** Grupy parametrów serwisowych/instalacyjnych: przy ich zmianie pokazujemy mocniejsze ostrzeżenie. */
 private val SENSITIVE_GROUPS = setOf("Manufacture", "Installation", "Service")
+
+/** Czy parametr można zmieniać z aplikacji: tak, gdy API podaje go jako RW (limity z ParamLimits sprawdzamy w oknie edycji). */
+private fun canEdit(p: Param): Boolean = p.access == "RW"
 
 private fun sameValue(a: Any?, b: Any?): Boolean {
     if (a == null || b == null) return a == b
@@ -592,10 +606,16 @@ private fun EditDialog(p: Param, current: Any?, onDismiss: () -> Unit, onSave: (
     var text by remember { mutableStateOf(current?.toString().orEmpty()) }
     var choice by remember { mutableStateOf(current?.toString()) }
 
+    val limit = ParamLimits.MIN_MAX[p.keyword]
+    val parsed = text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }
+    // Bez wpisu w ParamLimits aplikacja nie sprawdza zakresu (pilnuje go tylko serwer Iglutech).
+    val inRange = parsed != null && (limit == null || (parsed >= limit.first && parsed <= limit.second))
+    val stepOk = parsed != null && (p.scale <= 0.0 ||
+        Math.abs(parsed / p.scale - Math.round(parsed / p.scale).toDouble()) < 1e-6)
     val newValue: Any? = if (options.isNotEmpty()) {
         choice?.let { c -> if (isBool) c.toBooleanStrictOrNull() else (c.toDoubleOrNull()?.let { numberOut(it) } ?: c) }
     } else {
-        text.trim().replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() }?.let { numberOut(it) }
+        if (parsed != null && inRange && stepOk) numberOut(parsed) else null
     }
     val changed = newValue != null && !sameValue(newValue, current)
 
@@ -626,9 +646,37 @@ private fun EditDialog(p: Param, current: Any?, onDismiss: () -> Unit, onSave: (
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.fillMaxWidth()
                     )
+                    if (limit != null) {
+                        Text(
+                            "Zakres: ${limit.first} – ${limit.second}" +
+                                (if (p.units.isNotBlank()) " ${p.units}" else "") +
+                                (if (p.scale > 0.0 && p.scale < 1.0) ", krok ${p.scale}" else ""),
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (limit == null) {
+                        Text(
+                            "Brak limitu w pliku rejestrów: aplikacja nie sprawdza zakresu tej wartości.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    if (parsed != null && limit != null && !inRange) {
+                        Text("Wartość poza zakresem, nie zostanie wysłana.", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                    } else if (parsed != null && !stepOk) {
+                        Text("Wartość niezgodna z krokiem ${p.scale}.", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 if (changed && newValue != null) {
                     Text("Nowa: ${valueText(newValue, p)}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                }
+                if (p.keyword in ParamLimits.READ_ONLY) {
+                    Text(
+                        "Plik rejestrów oznacza ten parametr jako tylko do odczytu, choć API pozwala go zmienić.",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
                 if (p.group in SENSITIVE_GROUPS) {
                     Text(
