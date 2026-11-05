@@ -1,5 +1,6 @@
 package pl.mdinstal.narzedzia
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -39,7 +40,7 @@ import java.util.Locale
 
 private val OnlineGreen = Color(0xFF16A34A)
 
-/** Lista pomp pobrana z portalu Iglutech. Dotknięcie wiersza otwiera tę pompę w portalu. */
+/** Lista pomp pobrana z portalu Iglutech. Dotknięcie wiersza otwiera szczegóły pompy (z nich można przejść do portalu). */
 @Composable
 fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (String) -> Unit) {
     val ctx = LocalContext.current
@@ -49,6 +50,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
     var diag by remember { mutableStateOf(PumpStore.diag(ctx)) }
     var query by remember { mutableStateOf("") }
     var confirmClear by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Pump?>(null) }
 
     // Lista jest zasilana z ekranu Iglutech, więc odświeżamy ją na bieżąco.
     LaunchedEffect(Unit) {
@@ -71,7 +73,16 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
     }
     val onlineCount = pumps.count { it.online }
 
-    AppScaffold("Pompy ciepła", onBack) { pad ->
+    val sel = selected
+    if (sel != null) {
+        // Cofnięcie wraca do listy, nie zamyka całego ekranu.
+        BackHandler { selected = null }
+        PumpDetailScreen(
+            pump = sel,
+            onBack = { selected = null },
+            onOpenPortal = { onOpenPump(sel.serial) }
+        )
+    } else AppScaffold("Pompy ciepła", onBack) { pad ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -143,7 +154,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
                 )
                 LazyColumn(Modifier.fillMaxSize()) {
                     items(filtered, key = { it.serial }) { p ->
-                        PumpRow(p) { onOpenPump(p.serial) }
+                        PumpRow(p) { selected = p }
                     }
                 }
             }
