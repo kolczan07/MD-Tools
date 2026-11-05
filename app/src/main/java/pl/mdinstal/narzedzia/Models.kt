@@ -9,7 +9,7 @@ import java.util.Date
 import java.util.Locale
 
 enum class Screen {
-    Home, Radio, Network, Speedtest, Wifi, Weather, Iglutech,
+    Home, Radio, Network, Speedtest, Wifi, Lan, Arp, Weather, Iglutech,
     Shortcuts, Settings, IgluSettings, About, Schematic, Protocol
 }
 
