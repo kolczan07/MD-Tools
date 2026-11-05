@@ -102,26 +102,38 @@ object IgluApi {
 /**
  * Odczyt listy pomp: najpierw przez API (token z sesji portalu), a gdy się nie uda,
  * dotychczasowe czytanie tabeli ze strony. Zwraca tablicę JSON dla PumpStore.merge albo pusty tekst.
+ * Wynik próby (skąd dane, albo dlaczego API nie zadziałało) zapisuje w PumpStore.setDiag,
+ * żeby było widać go na ekranie "Pompy ciepła" (bez logcata). Wartość tokenu nigdy nie jest zapisywana.
  */
 internal suspend fun WebView.readPumps(): String? {
+    val ctx = context.applicationContext
+    var diag = ""
     try {
         val raw = evalJs(TOKEN_JS)
-        if (!raw.isNullOrBlank()) {
+        if (raw.isNullOrBlank()) {
+            diag = "Nie udało się odczytać pamięci strony (strona jeszcze się ładuje?)"
+        } else {
             val o = JSONObject(raw)
             val token = o.optString("t")
             if (token.isNotBlank()) {
                 val json = withContext(Dispatchers.IO) { IgluApi.fetchPumps(token) }
                 if (json != "[]") {
                     Log.d(API_TAG, "lista z API, token z ${o.optString("w")}")
+                    PumpStore.setDiag(ctx, "API OK (token z ${o.optString("w")}), pomp: ${JSONArray(json).length()}")
                     return json
                 }
+                diag = "API zwróciło pustą listę"
             } else {
                 // Tylko nazwy kluczy, nigdy wartości.
-                Log.d(API_TAG, "brak tokenu w pamięci strony, klucze: ${o.optJSONArray("keys")}")
+                val keys = o.optJSONArray("keys")?.toString().orEmpty()
+                Log.d(API_TAG, "brak tokenu w pamięci strony, klucze: $keys")
+                diag = "Brak tokenu w pamięci strony. Klucze: " + keys.take(600)
             }
         }
     } catch (e: Exception) {
         Log.d(API_TAG, "API: ${e.message}")
+        diag = "Błąd API: ${e.message}"
     }
+    PumpStore.setDiag(ctx, "$diag. Dane z tabeli strony.")
     return evalJs(SCRAPE_JS)
 }
