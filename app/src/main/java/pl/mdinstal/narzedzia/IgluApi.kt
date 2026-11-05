@@ -1,5 +1,6 @@
 package pl.mdinstal.narzedzia
 
+import android.util.Base64
 import android.util.Log
 import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,34 @@ internal const val TOKEN_JS = """
 
 private fun JSONObject.str(k: String): String = if (isNull(k)) "" else optString(k)
 
+/**
+ * Ostatni token dostępu pobrany z sesji portalu. Trzymany tylko w pamięci (znika po zamknięciu aplikacji).
+ * Ważność bierzemy z pola exp w tokenie.
+ */
+object IgluToken {
+    @Volatile var token: String? = null
+        private set
+    @Volatile private var expMs: Long = 0L
+
+    fun set(t: String) {
+        token = t
+        expMs = try {
+            val payload = t.split('.')[1]
+            val json = String(Base64.decode(payload, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP))
+            JSONObject(json).optLong("exp") * 1000L
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    fun clear() {
+        token = null
+        expMs = 0L
+    }
+
+    fun valid(): Boolean = token != null && System.currentTimeMillis() < expMs - 60_000L
+}
+
 /** Klient API Iglutech (https://api.iglutech.eu/api/v2), token Bearer bierzemy z sesji portalu w WebView. */
 object IgluApi {
     private const val BASE = "https://api.iglutech.eu/api/v2"
@@ -55,7 +84,7 @@ object IgluApi {
     private fun get(url: String, token: String): String {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 10_000
-        c.readTimeout = 15_000
+        c.readTimeout = 20_000
         c.setRequestProperty("Authorization", "Bearer $token")
         c.setRequestProperty("Accept", "application/json")
         c.setRequestProperty("User-Agent", "MD-Tools/3.1")
@@ -69,7 +98,7 @@ object IgluApi {
 
     /**
      * Pobiera wszystkie strony listy pomp i zwraca tablicę JSON w tym samym formacie co SCRAPE_JS
-     * (serial, model, partner, status, since, email), więc PumpStore.merge działa bez zmian.
+     * (serial, model, partner, status, since, email) plus id, więc PumpStore.merge działa bez zmian.
      */
     fun fetchPumps(token: String): String {
         val out = JSONArray()
@@ -83,6 +112,7 @@ object IgluApi {
                 if (sn.isBlank()) continue
                 out.put(
                     JSONObject()
+                        .put("id", d.optLong("id"))
                         .put("serial", sn)
                         .put("model", d.str("model"))
                         .put("partner", d.str("partnerName"))
@@ -97,13 +127,24 @@ object IgluApi {
         }
         return out.toString()
     }
+
+    /** Szczegóły pompy (nazwa własna, status, wersje, dane systemowe). Po wewnętrznym id pompy. */
+    fun heatPump(id: Long, token: String): JSONObject = JSONObject(get("$BASE/heatPumps/$id", token))
+
+    /** Stan pracy: obiekt z currentState i desiredState (słowniki słowo kluczowe -> wartość). Po id. */
+    fun state(id: Long, token: String): JSONObject =
+        JSONObject(get("$BASE/devices/$id/state", token)).getJSONObject("data")
+
+    /** Opis parametrów (słowo kluczowe, jednostka, dostęp RW/R, grupa, lista wartości). Po numerze seryjnym. */
+    fun config(serial: String, token: String): JSONArray =
+        JSONObject(get("$BASE/devices/$serial/config/render", token)).getJSONArray("parameters")
 }
 
 /**
  * Odczyt listy pomp: najpierw przez API (token z sesji portalu), a gdy się nie uda,
  * dotychczasowe czytanie tabeli ze strony. Zwraca tablicę JSON dla PumpStore.merge albo pusty tekst.
  * Wynik próby (skąd dane, albo dlaczego API nie zadziałało) zapisuje w PumpStore.setDiag,
- * żeby było widać go na ekranie "Pompy ciepła" (bez logcata). Wartość tokenu nigdy nie jest zapisywana.
+ * żeby było widać go na ekranie "Pompy ciepła" (bez logcata). Wartość tokenu nigdy nie jest zapisywana na dysku.
  */
 internal suspend fun WebView.readPumps(): String? {
     val ctx = context.applicationContext
@@ -116,6 +157,7 @@ internal suspend fun WebView.readPumps(): String? {
             val o = JSONObject(raw)
             val token = o.optString("t")
             if (token.isNotBlank()) {
+                IgluToken.set(token)
                 val json = withContext(Dispatchers.IO) { IgluApi.fetchPumps(token) }
                 if (json != "[]") {
                     Log.d(API_TAG, "lista z API, token z ${o.optString("w")}")
