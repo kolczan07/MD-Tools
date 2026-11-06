@@ -45,7 +45,11 @@ object Updater {
      * debug = false: zwykły plik (bez "debug" w nazwie); gdy takiego nie ma, pierwszy APK.
      */
     private fun pick(debug: Boolean): UpdateInfo? {
-        val json = JSONObject(Http.get("https://api.github.com/repos/$REPO/releases/latest"))
+        // Debug: stałe wydanie z tagiem "debug" (workflow nadpisuje je przy każdym buildzie debug).
+        // Zwykłe: najnowsze wydanie (GitHub pomija w "latest" wydania oznaczone jako pre-release).
+        val url = if (debug) "https://api.github.com/repos/$REPO/releases/tags/debug"
+        else "https://api.github.com/repos/$REPO/releases/latest"
+        val json = JSONObject(Http.get(url))
         val tag = json.optString("tag_name").removePrefix("v").removePrefix("V")
         val assets = json.optJSONArray("assets") ?: return null
         var fallback: UpdateInfo? = null
@@ -68,7 +72,7 @@ object Updater {
     /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
     fun latest(): UpdateInfo? = pick(false)
 
-    /** Blokujące: wywołuj na wątku IO. null = najnowsze wydanie nie ma pliku APK z "debug" w nazwie. */
+    /** Blokujące: wywołuj na wątku IO. null = wydanie z tagiem "debug" nie ma pliku APK z "debug" w nazwie. */
     fun latestDebug(): UpdateInfo? = pick(true)
 
     /** Porównuje wersje semantycznie: "3.3" vs "3.2" → true. */
@@ -229,7 +233,7 @@ fun DebugDownloadCard(modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Najnowsza wersja z diagnostyką, z najnowszego wydania na GitHubie") }
+    var status by remember { mutableStateOf("Najnowszy build debug z GitHuba (wydanie „debug”)") }
 
     AppCard(modifier.fillMaxWidth(), onClick = {
         if (busy) return@AppCard
@@ -244,7 +248,7 @@ fun DebugDownloadCard(modifier: Modifier = Modifier) {
             try {
                 val info = withContext(Dispatchers.IO) { Updater.latestDebug() }
                 if (info == null) {
-                    status = "Najnowsze wydanie nie ma pliku APK z „debug” w nazwie."
+                    status = "Wydanie „debug” nie ma pliku APK z „debug” w nazwie."
                 } else {
                     status = "Pobieranie… 0%"
                     val f = withContext(Dispatchers.IO) {
