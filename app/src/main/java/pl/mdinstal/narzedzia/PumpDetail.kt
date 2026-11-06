@@ -1,9 +1,12 @@
 package pl.mdinstal.narzedzia
 
 import android.annotation.SuppressLint
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.border
@@ -35,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -216,6 +220,111 @@ private fun TokenFetchView(onDone: () -> Unit) {
     }
 }
 
+/** Most JS -> Kotlin dla strumienia na żywo (wywołania z wątku WebView przekazujemy na wątek główny). */
+private class LiveBridge(
+    private val onParams: (String) -> Unit,
+    private val onStatus: (String) -> Unit
+) {
+    private val main = Handler(Looper.getMainLooper())
+
+    @JavascriptInterface
+    fun data(json: String) { main.post { onParams(json) } }
+
+    @JavascriptInterface
+    fun status(s: String) { main.post { onStatus(s) } }
+}
+
+/**
+ * Strumień na żywo (SignalR, protokół JSON) z https://signalr.iglutech.eu/hubs/devicePayload-stream.
+ * Tak samo robi portal: handshake {"protocol":"json","version":1}, potem wywołanie
+ * SubscribeToServiceDeviceStream z numerem seryjnym; w odpowiedzi przychodzą ServiceStreamData z pełnym
+ * zestawem parametrów (także odczyty analogowe: temperatury, ciśnienia, wyjścia, liczniki), mniej więcej co 25 s.
+ * Połączenie robi ukryty WebView z adresem bazowym portalu (żeby origin się zgadzał), bez dodatkowych bibliotek.
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun LiveStreamView(
+    serial: String,
+    token: String,
+    onParams: (Map<String, Any?>) -> Unit,
+    onStatus: (String) -> Unit
+) {
+    val html = """
+<html><body><script>
+(function(){
+  var RS=String.fromCharCode(30);
+  var TOKEN=${JSONObject.quote(token)};
+  var SERIAL=${JSONObject.quote(serial)};
+  var ws=null, timer=null;
+  function send(o){ try{ ws.send(JSON.stringify(o)+RS); }catch(e){} }
+  function connect(){
+    Android.status('łączenie…');
+    try{
+      ws=new WebSocket('wss://signalr.iglutech.eu/hubs/devicePayload-stream?access_token='+encodeURIComponent(TOKEN));
+    }catch(e){ Android.status('błąd: '+e); return; }
+    ws.onopen=function(){ ws.send(JSON.stringify({protocol:'json',version:1})+RS); };
+    ws.onmessage=function(ev){
+      String(ev.data).split(RS).forEach(function(part){
+        if(!part) return;
+        var o; try{ o=JSON.parse(part); }catch(e){ return; }
+        if(o.type===undefined){
+          if(o.error){ Android.status('błąd: '+o.error); return; }
+          send({type:6});
+          send({arguments:[SERIAL],target:'SubscribeToServiceDeviceStream',type:1});
+        } else if(o.type===1 && o.target==='OnSubscribeSuccess'){
+          Android.status('połączono');
+        } else if(o.type===1 && o.target==='ServiceStreamData'){
+          var a=(o.arguments||[])[0];
+          if(a && a.parameters){ Android.data(JSON.stringify(a.parameters)); Android.status('połączono'); }
+        } else if(o.type===6){
+          send({type:6});
+        } else if(o.type===7){
+          Android.status('rozłączono przez serwer');
+        }
+      });
+    };
+    ws.onclose=function(){
+      Android.status('rozłączono (ponawiam)');
+      clearTimeout(timer); timer=setTimeout(connect,5000);
+    };
+    ws.onerror=function(){};
+  }
+  connect();
+  setInterval(function(){ if(ws && ws.readyState===1) send({type:6}); },15000);
+})();
+</script></body></html>
+"""
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { c ->
+            WebView(c).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                settings.javaScriptEnabled = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                setBackgroundColor(0xFF070B14.toInt())
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+                setOnTouchListener { _, _ -> true }
+                addJavascriptInterface(
+                    LiveBridge(
+                        onParams = { json ->
+                            try { onParams(toMap(JSONObject(json))) } catch (e: Exception) { }
+                        },
+                        onStatus = onStatus
+                    ),
+                    "Android"
+                )
+                webViewClient = WebViewClient()
+                loadDataWithBaseURL(DETAIL_PORTAL_URL, html, "text/html", "utf-8", null)
+            }
+        },
+        onRelease = { it.destroy() }
+    )
+}
+
 /**
  * Ekran szczegółów pompy: stan, wersje oprogramowania i wszystkie parametry (tylko odczyt),
  * pogrupowane tak jak w portalu. Parametry bez wartości w stanie pompy są pomijane.
@@ -234,6 +343,10 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
     var confirmEdit by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Param?>(null) }
     var saveMsg by remember { mutableStateOf<String?>(null) }
+    // Odczyty na żywo ze strumienia SignalR (nakładają się na stan z API) i stan połączenia.
+    var live by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
+    var liveStatus by remember { mutableStateOf("") }
+    val effective: Map<String, Any?> = remember(detail, live) { (detail?.current ?: emptyMap()) + live }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(tokenOk, reload) {
@@ -262,6 +375,19 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                 tokenOk = IgluToken.valid()
                 if (!tokenOk) tokenFailed = true
             })
+        }
+
+        val streamToken = IgluToken.token
+        if (tokenOk && streamToken != null && pump.id > 0L) {
+            // Klucz = token: po odnowieniu tokenu strumień łączy się od nowa.
+            key(streamToken) {
+                LiveStreamView(
+                    serial = pump.serial,
+                    token = streamToken,
+                    onParams = { live = live + it },
+                    onStatus = { liveStatus = it }
+                )
+            }
         }
 
         AppScaffold(pump.serial, onBack) { pad ->
@@ -325,7 +451,9 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                         editMode = editMode,
                         onToggleEdit = { if (editMode) editMode = false else confirmEdit = true },
                         onEdit = { editing = it },
-                        saveMsg = saveMsg
+                        saveMsg = saveMsg,
+                        current = effective,
+                        liveStatus = liveStatus
                     )
                 }
             }
@@ -352,7 +480,7 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
     if (ep != null && dnow != null) {
         EditDialog(
             p = ep,
-            current = dnow.current[ep.keyword],
+            current = effective[ep.keyword],
             onDismiss = { editing = null },
             onSave = { value ->
                 editing = null
@@ -389,12 +517,14 @@ private fun DetailBody(
     editMode: Boolean,
     onToggleEdit: () -> Unit,
     onEdit: (Param) -> Unit,
-    saveMsg: String?
+    saveMsg: String?,
+    current: Map<String, Any?>,
+    liveStatus: String
 ) {
     val q = query.trim().lowercase()
-    val groups = remember(d) {
+    val groups = remember(d, current.size) {
         d.params
-            .filter { d.current.containsKey(it.keyword) }
+            .filter { current.containsKey(it.keyword) }
             .groupBy { it.group }
             .entries
             .sortedBy { e -> e.value.first().groupOrder }
@@ -435,6 +565,11 @@ private fun DetailBody(
                     if (saveMsg != null) {
                         Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                     }
+                    Text(
+                        "Na żywo: ${liveStatus.ifBlank { "—" }}",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Switch(checked = editMode, onCheckedChange = { onToggleEdit() })
                         Text(
@@ -503,16 +638,14 @@ private fun DetailBody(
         }
         items(shown, key = { "p_" + it.keyword }) { p ->
             val editable = editMode && canEdit(p)
-            FieldRow(p, d, editable, locked = editMode && p.access == "RW" && !editable) { onEdit(p) }
+            FieldRow(p, current[p.keyword], d.desired[p.keyword], editable, locked = editMode && p.access == "RW" && !editable) { onEdit(p) }
         }
     }
 }
 
 /** Jedno pole parametru jak na portalu: podpis z jednostką, pod nim wartość w ramce (tylko odczyt). */
 @Composable
-private fun FieldRow(p: Param, d: Detail, editable: Boolean, locked: Boolean, onEdit: () -> Unit) {
-    val cur = d.current[p.keyword]
-    val des = d.desired[p.keyword]
+private fun FieldRow(p: Param, cur: Any?, des: Any?, editable: Boolean, locked: Boolean, onEdit: () -> Unit) {
     val readOnly = p.access == "R"
     Column(
         Modifier
