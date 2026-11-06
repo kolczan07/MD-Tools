@@ -99,7 +99,8 @@ class RadioService : MediaSessionService() {
     }
 }
 
-private enum class RadioTab { SEARCH, FAVORITES }
+// Kolejność = kolejność zakładek na ekranie (Ulubione pierwsze, Szukaj druga)
+private enum class RadioTab { FAVORITES, SEARCH }
 
 private val RADIO_HOSTS = listOf(
     "https://de1.api.radio-browser.info",
@@ -139,7 +140,7 @@ fun RadioScreen(onBack: () -> Unit) {
     var onlyPl by remember { mutableStateOf(true) }
     var results by remember { mutableStateOf<List<Station>>(emptyList()) }
     var status by remember { mutableStateOf("") }
-    var activeTab by remember { mutableStateOf(RadioTab.SEARCH) }
+    var activeTab by remember { mutableStateOf(RadioTab.FAVORITES) }
     val favs = remember { mutableStateListOf<Station>().apply { addAll(Prefs.favorites(ctx)) } }
 
     var controller by remember { mutableStateOf<MediaController?>(null) }
@@ -251,8 +252,8 @@ fun RadioScreen(onBack: () -> Unit) {
             ) {
                 RadioTab.entries.forEach { tab ->
                     val label = when (tab) {
-                        RadioTab.SEARCH -> "🔍 Szukaj"
                         RadioTab.FAVORITES -> "★ Ulubione"
+                        RadioTab.SEARCH -> "🔍 Szukaj"
                     }
                     FilterChip(
                         selected = activeTab == tab,
@@ -294,6 +295,25 @@ fun RadioScreen(onBack: () -> Unit) {
 
             // ── ZAWARTOŚĆ ZAKŁADEK ────────────────────────────────
             when (activeTab) {
+                RadioTab.FAVORITES -> {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        if (favs.isEmpty()) {
+                            item { SubText("Brak ulubionych. Dotknij ☆ przy stacji, żeby dodać.") }
+                        }
+                        items(favs.toList()) { s ->
+                            StationRow(
+                                s,
+                                isFav = true,
+                                onPlay = { play(s) },
+                                onFav = { toggleFav(s) }
+                            )
+                        }
+                    }
+                }
+
                 RadioTab.SEARCH -> {
                     Row(
                         Modifier
@@ -326,25 +346,6 @@ fun RadioScreen(onBack: () -> Unit) {
                             StationRow(
                                 s,
                                 isFav = favs.any { it.url == s.url },
-                                onPlay = { play(s) },
-                                onFav = { toggleFav(s) }
-                            )
-                        }
-                    }
-                }
-
-                RadioTab.FAVORITES -> {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (favs.isEmpty()) {
-                            item { SubText("Brak ulubionych. Dotknij ☆ przy stacji, żeby dodać.") }
-                        }
-                        items(favs.toList()) { s ->
-                            StationRow(
-                                s,
-                                isFav = true,
                                 onPlay = { play(s) },
                                 onFav = { toggleFav(s) }
                             )
