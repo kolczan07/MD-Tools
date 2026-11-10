@@ -272,7 +272,7 @@ fun RadioScreen(onBack: () -> Unit) {
             c.setMediaItem(
                 MediaItem.Builder()
                     .setUri(real)
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-Tools Radio").build())
+                    .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-Radio").build())
                     .build()
             )
             c.prepare()
