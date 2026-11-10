@@ -52,6 +52,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaController
@@ -76,8 +77,15 @@ class RadioService : MediaSessionService() {
             .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(15000)
+        // OpenFM sprawdza Referer/Origin – dokładamy je tylko dla hostów open.fm
+        val withHeaders = ResolvingDataSource.Factory(http) { spec ->
+            val host = spec.uri.host.orEmpty()
+            if (host.endsWith("open.fm")) {
+                spec.withAdditionalHeaders(mapOf("Referer" to "https://open.fm/", "Origin" to "https://open.fm"))
+            } else spec
+        }
         val player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(http))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(withHeaders))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -157,6 +165,7 @@ fun RadioScreen(onBack: () -> Unit) {
     var playing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
     var errorInfo by remember { mutableStateOf("") }
+    var nowUrl by remember { mutableStateOf("") }
 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -214,6 +223,7 @@ fun RadioScreen(onBack: () -> Unit) {
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         error = false
+        nowUrl = s.url
         c.setMediaItem(
             MediaItem.Builder()
                 .setUri(s.url)
@@ -308,10 +318,10 @@ fun RadioScreen(onBack: () -> Unit) {
 
             if (error && errorInfo.isNotEmpty()) {
                 Text(
-                    errorInfo,
+                    errorInfo + "\n" + nowUrl,
                     color = MaterialTheme.colorScheme.error,
                     fontSize = 12.sp,
-                    maxLines = 3,
+                    maxLines = 5,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
