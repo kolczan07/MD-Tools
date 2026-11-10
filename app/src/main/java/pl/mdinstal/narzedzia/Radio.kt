@@ -51,7 +51,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -68,7 +70,14 @@ class RadioService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Wiele stacji (m.in. OpenFM) przekierowuje https -> http lub odrzuca domyślny UA ExoPlayera
+        val http = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(15000)
         val player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(http))
             .setAudioAttributes(
                 AudioAttributes.Builder()
                     .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -147,6 +156,7 @@ fun RadioScreen(onBack: () -> Unit) {
     var nowName by remember { mutableStateOf<String?>(null) }
     var playing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf(false) }
+    var errorInfo by remember { mutableStateOf("") }
 
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -172,7 +182,10 @@ fun RadioScreen(onBack: () -> Unit) {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 nowName = mediaItem?.mediaMetadata?.title?.toString()
             }
-            override fun onPlayerError(e: PlaybackException) { error = true }
+            override fun onPlayerError(e: PlaybackException) {
+                error = true
+                errorInfo = e.errorCodeName + (e.cause?.message?.let { ": $it" } ?: "")
+            }
             override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) error = false }
         }
         val token = SessionToken(ctx, ComponentName(ctx, RadioService::class.java))
@@ -291,6 +304,17 @@ fun RadioScreen(onBack: () -> Unit) {
                         Text("STOP", color = Color.White, fontWeight = FontWeight.Bold)
                     }
                 }
+            }
+
+            if (error && errorInfo.isNotEmpty()) {
+                Text(
+                    errorInfo,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 12.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
             }
 
             // ── ZAWARTOŚĆ ZAKŁADEK ────────────────────────────────
