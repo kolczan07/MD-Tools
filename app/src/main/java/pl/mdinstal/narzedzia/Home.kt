@@ -39,13 +39,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /** target == null oznacza kafelek "Iglutech Service": otwiera listę pomp (ekran spoza stosu, obsługuje go MainActivity). */
-private data class Tile(val icon: String, val title: String, val desc: String, val target: Screen?, val logo: Int? = null)
+private data class Tile(val icon: String, val title: String, val desc: String, val target: Screen?, val logo: Int? = null, val logoWide: Boolean = true)
 
 private val tools = listOf(
     Tile("📻", "Radio internetowe", "Wyszukiwarka stacji, ulubione, gra w tle", Screen.Radio),
     Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN, ARP", Screen.Network),
     Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
-    Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null),
+    Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null, R.drawable.logo_iglu_tile, logoWide = false),
     Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts),
     Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj, R.drawable.logo_asaj)
 )
@@ -119,7 +119,15 @@ private fun ToolTile(t: Tile, modifier: Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     AppCard(modifier = modifier.heightIn(min = 150.dp), onClick = onClick) {
         Column(Modifier.padding(16.dp)) {
-            if (t.logo != null) {
+            if (t.logo != null && !t.logoWide) {
+                // Kwadratowe logo z własnym tłem.
+                Image(
+                    painter = painterResource(t.logo),
+                    contentDescription = t.title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
+                )
+            } else if (t.logo != null) {
                 // Logo hurtowni na białym tle (jest zrobione pod jasne tło).
                 Box(
                     Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(12.dp)).background(Color.White),
