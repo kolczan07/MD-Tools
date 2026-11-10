@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Oficjalne streamy OpenFM (stream.open.fm/<id>) działają po zwykłym HTTP -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">open.fm</domain>
+    </domain-config>
+</network-security-config>

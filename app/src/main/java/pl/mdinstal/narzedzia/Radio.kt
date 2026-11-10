@@ -80,7 +80,7 @@ class RadioService : MediaSessionService() {
         // OpenFM sprawdza Referer/Origin – dokładamy je tylko dla hostów open.fm
         val withHeaders = ResolvingDataSource.Factory(http) { spec ->
             val host = spec.uri.host.orEmpty()
-            if (host.endsWith("open.fm")) {
+            if (host.endsWith("open.fm") || host.endsWith("reconv.pl")) {
                 spec.withAdditionalHeaders(mapOf("Referer" to "https://open.fm/", "Origin" to "https://open.fm"))
             } else spec
         }
@@ -136,7 +136,7 @@ private fun searchStations(query: String, onlyPl: Boolean): List<Station>? {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val url = o.optString("url_resolved")
-                if (url.startsWith("https://")) {
+                if (url.startsWith("https://") || url.startsWith("http://stream.open.fm/")) {
                     out.add(Station(o.optString("name").trim().ifEmpty { "Stacja" }, url))
                 }
             }
