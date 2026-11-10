@@ -9,6 +9,7 @@ import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -27,6 +29,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -42,9 +45,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -55,6 +63,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import android.content.Intent
+import androidx.core.content.FileProvider
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 
 private const val DETAIL_PORTAL_URL = "https://service.iglutech.eu"
@@ -167,6 +180,60 @@ private fun valueText(v: Any?, p: Param): String {
         return String.format(Locale.US, "%.${decimals(p.scale)}f", v.toDouble())
     }
     return raw
+}
+
+/** Jedna ramka ze strumienia: czas odbioru i wartości liczbowe (logiczne jako 1/0). */
+private class LiveFrame(val t: Long, val values: Map<String, Double>)
+
+/** Ile historii trzymamy w pamięci dla wykresów trybu Live. */
+private const val LIVE_WINDOW_MS = 10 * 60 * 1000L
+
+private fun appendFrame(old: List<LiveFrame>, p: Map<String, Any?>): List<LiveFrame> {
+    val now = System.currentTimeMillis()
+    val vals = LinkedHashMap<String, Double>()
+    for ((k, v) in p) {
+        when (v) {
+            is Boolean -> vals[k] = if (v) 1.0 else 0.0
+            is Number -> vals[k] = v.toDouble()
+            else -> {}
+        }
+    }
+    if (vals.isEmpty()) return old
+    return (old + LiveFrame(now, vals)).filter { it.t >= now - LIVE_WINDOW_MS }
+}
+
+private fun clockText(t: Long): String = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(t))
+
+/** Wartość z wykresu w postaci zrozumiałej dla valueText (Boolean, Long albo Double). */
+private fun chartValue(v: Double, p: Param): Any = when {
+    p.valueType == "boolean" -> v > 0.5
+    p.valueType != "decimal" && v == Math.floor(v) && Math.abs(v) < 1e12 -> v.toLong()
+    else -> v
+}
+
+/** Zapisuje ramki jako CSV (średnik, przecinek dziesiętny: otwiera się w Excelu) i otwiera okno udostępniania. */
+private fun exportCsv(ctx: android.content.Context, serial: String, frames: List<LiveFrame>, keys: List<String>) {
+    val sb = StringBuilder()
+    sb.append("czas;").append(keys.joinToString(";")).append("\n")
+    val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    for (f in frames) {
+        sb.append(fmt.format(Date(f.t)))
+        for (k in keys) {
+            sb.append(';')
+            f.values[k]?.let { sb.append(it.toString().replace('.', ',')) }
+        }
+        sb.append("\n")
+    }
+    val dir = File(ctx.cacheDir, "pdf").apply { mkdirs() }
+    val file = File(dir, "Live_${serial}.csv")
+    file.writeText("\uFEFF" + sb.toString(), Charsets.UTF_8)
+    val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+    val i = Intent(Intent.ACTION_SEND).apply {
+        type = "text/csv"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    ctx.startActivity(Intent.createChooser(i, "Eksport CSV").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
 /**
@@ -346,6 +413,12 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
     // Odczyty na żywo ze strumienia SignalR (nakładają się na stan z API) i stan połączenia.
     var live by remember { mutableStateOf<Map<String, Any?>>(emptyMap()) }
     var liveStatus by remember { mutableStateOf("") }
+    // Tryb Live: strumień łączy się tylko wtedy, edycja jest zablokowana, a odczyty rysują wykresy.
+    var liveMode by remember(pump.serial) { mutableStateOf(false) }
+    var paused by remember(pump.serial) { mutableStateOf(false) }
+    var frames by remember(pump.serial) { mutableStateOf<List<LiveFrame>>(emptyList()) }
+    var chartSel by remember(pump.serial) { mutableStateOf<Set<String>>(emptySet()) }
+    val pausedNow by rememberUpdatedState(paused)
     val effective: Map<String, Any?> = remember(detail, live) { (detail?.current ?: emptyMap()) + live }
     val scope = rememberCoroutineScope()
 
@@ -378,13 +451,18 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
         }
 
         val streamToken = IgluToken.token
-        if (tokenOk && streamToken != null && pump.id > 0L) {
+        if (liveMode && tokenOk && streamToken != null && pump.id > 0L) {
             // Klucz = token: po odnowieniu tokenu strumień łączy się od nowa.
             key(streamToken) {
                 LiveStreamView(
                     serial = pump.serial,
                     token = streamToken,
-                    onParams = { live = live + it },
+                    onParams = {
+                        if (!pausedNow) {
+                            live = live + it
+                            frames = appendFrame(frames, it)
+                        }
+                    },
                     onStatus = { liveStatus = it }
                 )
             }
@@ -453,7 +531,18 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                         onEdit = { editing = it },
                         saveMsg = saveMsg,
                         current = effective,
-                        liveStatus = liveStatus
+                        liveStatus = liveStatus,
+                        liveMode = liveMode,
+                        onToggleLive = {
+                            liveMode = !liveMode
+                            if (liveMode) editMode = false else liveStatus = ""
+                            paused = false
+                        },
+                        paused = paused,
+                        onTogglePause = { paused = !paused },
+                        frames = frames,
+                        chartSel = chartSel,
+                        onChartSel = { k, on -> chartSel = if (on) chartSel + k else chartSel - k }
                     )
                 }
             }
@@ -519,8 +608,16 @@ private fun DetailBody(
     onEdit: (Param) -> Unit,
     saveMsg: String?,
     current: Map<String, Any?>,
-    liveStatus: String
+    liveStatus: String,
+    liveMode: Boolean,
+    onToggleLive: () -> Unit,
+    paused: Boolean,
+    onTogglePause: () -> Unit,
+    frames: List<LiveFrame>,
+    chartSel: Set<String>,
+    onChartSel: (String, Boolean) -> Unit
 ) {
+    val ctx = LocalContext.current
     val q = query.trim().lowercase()
     val groups = remember(d, current.size) {
         d.params
@@ -566,12 +663,21 @@ private fun DetailBody(
                         Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                     }
                     Text(
-                        "Na żywo: ${liveStatus.ifBlank { "—" }}",
+                        "Na żywo: ${liveStatus.ifBlank { "—" }}" +
+                            if (liveMode) " · ramek: ${frames.size}" +
+                                (frames.lastOrNull()?.let { " · ostatnia: ${clockText(it.t)}" } ?: "") else "",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = editMode, onCheckedChange = { onToggleEdit() })
+                        Switch(checked = liveMode, onCheckedChange = { onToggleLive() })
+                        Text(
+                            if (liveMode) "  Tryb Live włączony (edycja zablokowana)" else "  Tryb Live wyłączony",
+                            fontSize = 14.sp
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Switch(checked = editMode, enabled = !liveMode, onCheckedChange = { onToggleEdit() })
                         Text(
                             if (editMode) "  Edycja włączona (dotknij pola z ✎)" else "  Edycja parametrów wyłączona",
                             fontSize = 14.sp
@@ -599,7 +705,64 @@ private fun DetailBody(
                     .padding(bottom = 8.dp)
             )
         }
-        if (q.isEmpty()) {
+        if (liveMode) {
+            item {
+                Row(
+                    Modifier.padding(bottom = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(onClick = onTogglePause, modifier = Modifier.weight(1f)) {
+                        Text(if (paused) "Wznów" else "Pauza")
+                    }
+                    Button(
+                        enabled = frames.isNotEmpty(),
+                        onClick = {
+                            val keys = d.params.map { it.keyword }
+                                .filter { k -> (if (chartSel.isEmpty()) true else k in chartSel) && frames.any { it.values.containsKey(k) } }
+                            exportCsv(ctx, pump.serial, frames, keys)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Eksport CSV") }
+                }
+            }
+            val charted = d.params.filter { it.keyword in chartSel && frames.any { f -> f.values.containsKey(it.keyword) } }
+            if (frames.isEmpty()) {
+                item {
+                    Text(
+                        "Czekam na dane ze strumienia (pierwsza ramka może przyjść po kilkunastu sekundach)…",
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
+            } else if (charted.isEmpty()) {
+                item {
+                    Text(
+                        "Zaznacz poniżej parametry, które mają się rysować na wykresach.",
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
+            }
+            items(charted, key = { "c_" + it.keyword }) { p -> LiveChart(p, frames) }
+            item {
+                Text("Filtry wykresów", fontWeight = FontWeight.Bold, fontSize = 20.sp, modifier = Modifier.padding(bottom = 8.dp))
+            }
+            val avail = frames.flatMap { it.values.keys }.toSet()
+            val list = d.params
+                .filter { it.keyword in avail && (q.isEmpty() || it.keyword.lowercase().contains(q)) }
+                .sortedWith(compareBy({ it.groupOrder }, { it.order }))
+            items(list, key = { "f_" + it.keyword }) { p ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onChartSel(p.keyword, p.keyword !in chartSel) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(checked = p.keyword in chartSel, onCheckedChange = { onChartSel(p.keyword, it) })
+                    Text(p.keyword + if (p.units.isNotBlank()) " (${p.units})" else "", fontSize = 15.sp)
+                }
+            }
+        } else if (q.isEmpty()) {
             // Zakładki grup jak na portalu (przewijane w bok).
             item {
                 Row(
@@ -636,9 +799,93 @@ private fun DetailBody(
                 )
             }
         }
-        items(shown, key = { "p_" + it.keyword }) { p ->
+        if (!liveMode) items(shown, key = { "p_" + it.keyword }) { p ->
             val editable = editMode && canEdit(p)
             FieldRow(p, current[p.keyword], d.desired[p.keyword], editable, locked = editMode && p.access == "RW" && !editable) { onEdit(p) }
+        }
+    }
+}
+
+/** Wykres jednego parametru z historii ramek: linia (liczby) albo schodki (stany 0/1). */
+@Composable
+private fun LiveChart(p: Param, frames: List<LiveFrame>) {
+    val pts = frames.mapNotNull { f -> f.values[p.keyword]?.let { f.t to it } }
+    val isBool = p.valueType == "boolean"
+    val lineColor = MaterialTheme.colorScheme.primary
+    val gridColor = MaterialTheme.colorScheme.outline
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp)
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                p.keyword + if (p.units.isNotBlank()) " (${p.units})" else "",
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp
+            )
+            val last = pts.lastOrNull()?.second
+            Text(
+                "Teraz: " + if (last == null) "—" else valueText(chartValue(last, p), p),
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (pts.size < 2) {
+                Text("Zbieram punkty…", fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+            } else {
+                val t0 = pts.first().first
+                val t1 = pts.last().first
+                var lo = if (isBool) 0.0 else pts.minOf { it.second }
+                var hi = if (isBool) 1.0 else pts.maxOf { it.second }
+                if (!isBool) {
+                    if (hi - lo < 1e-9) {
+                        lo -= 1.0
+                        hi += 1.0
+                    } else {
+                        val pad = (hi - lo) * 0.1
+                        lo -= pad
+                        hi += pad
+                    }
+                }
+                val loF = lo
+                val hiF = hi
+                Canvas(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .padding(top = 8.dp)
+                ) {
+                    val w = size.width
+                    val h = size.height
+                    val span = (t1 - t0).coerceAtLeast(1L).toFloat()
+                    fun px(t: Long): Float = (t - t0).toFloat() / span * w
+                    fun py(v: Double): Float = h - ((v - loF) / (hiF - loF)).toFloat() * h
+                    drawLine(gridColor, Offset(0f, h), Offset(w, h), 1f)
+                    drawLine(gridColor, Offset(0f, 0f), Offset(0f, h), 1f)
+                    val path = Path()
+                    pts.forEachIndexed { i, (t, v) ->
+                        val x = px(t)
+                        val y = py(v)
+                        if (i == 0) path.moveTo(x, y)
+                        else {
+                            if (isBool) path.lineTo(x, py(pts[i - 1].second))
+                            path.lineTo(x, y)
+                        }
+                    }
+                    drawPath(path, lineColor, style = Stroke(width = 3f))
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(clockText(t0), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (!isBool) {
+                        Text(
+                            "min ${valueText(chartValue(pts.minOf { it.second }, p), p)} · max ${valueText(chartValue(pts.maxOf { it.second }, p), p)}",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(clockText(t1), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }
