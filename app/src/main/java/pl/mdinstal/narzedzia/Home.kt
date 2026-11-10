@@ -1,5 +1,6 @@
 package pl.mdinstal.narzedzia
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,21 +30,24 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /** target == null oznacza kafelek "Iglutech Service": otwiera listę pomp (ekran spoza stosu, obsługuje go MainActivity). */
-private data class Tile(val icon: String, val title: String, val desc: String, val target: Screen?)
+private data class Tile(val icon: String, val title: String, val desc: String, val target: Screen?, val logo: Int? = null)
 
 private val tools = listOf(
     Tile("📻", "Radio internetowe", "Wyszukiwarka stacji, ulubione, gra w tle", Screen.Radio),
     Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN, ARP", Screen.Network),
     Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
     Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null),
-    Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj),
-    Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts)
+    Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts),
+    Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj, R.drawable.logo_asaj)
 )
 
 private val docs = listOf(
@@ -115,10 +119,25 @@ private fun ToolTile(t: Tile, modifier: Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     AppCard(modifier = modifier.heightIn(min = 150.dp), onClick = onClick) {
         Column(Modifier.padding(16.dp)) {
-            Box(
-                Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(cs.primary.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) { Text(t.icon, fontSize = 22.sp) }
+            if (t.logo != null) {
+                // Logo hurtowni na białym tle (jest zrobione pod jasne tło).
+                Box(
+                    Modifier.fillMaxWidth().height(44.dp).clip(RoundedCornerShape(12.dp)).background(Color.White),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Image(
+                        painter = painterResource(t.logo),
+                        contentDescription = t.title,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 6.dp)
+                    )
+                }
+            } else {
+                Box(
+                    Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(cs.primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) { Text(t.icon, fontSize = 22.sp) }
+            }
             Spacer(Modifier.height(12.dp))
             Text(t.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
             Spacer(Modifier.height(6.dp))

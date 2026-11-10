@@ -156,12 +156,13 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
     }
 
     private suspend fun isLoggedIn(): Boolean {
+        // Zalogowane strony mają link wylogowania, strona logowania i strony dla gości go nie mają.
         val o = run(
-            "var r=await fetch('/moje-konto/person-data',{credentials:'same-origin'});" +
+            "var r=await fetch('/moje-konto/index',{credentials:'same-origin'});" +
                 "var t=await r.text();" +
-                "return {login:(r.url.indexOf('/login')>=0)||(t.indexOf('app_username')>=0)};"
+                "return {ok:(r.url.indexOf('/login')<0)&&(t.indexOf('/logout')>=0)};"
         ) as JSONObject
-        return !o.optBoolean("login", true)
+        return o.optBoolean("ok", false)
     }
 
     private suspend fun ensureLogin(user: String, pass: String) {
@@ -184,7 +185,7 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
     suspend fun docs(page: Int): Pair<List<AsajDoc>, Boolean> = lock.withLock {
         val js =
             "var page=" + page + ";" +
-                "var url='/moje-konto/dokumenty-handlowe'+(page>1?'/pageno/'+page:'')+'?filter_document_type=wz';" +
+                "var url='/moje-konto/dokumenty-handlowe'+(page>1?'/pageno/'+page:'');" +
                 "var r=await fetch(url,{credentials:'same-origin'});" +
                 "if(r.url.indexOf('/login')>=0) throw new Error('Sesja wygasła');" +
                 "var t=await r.text();" +
@@ -199,7 +200,7 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
                 "out.push({type:td[0].textContent.trim(),number:td[1].textContent.trim()," +
                 "date:td[2].textContent.trim(),gross:g,pdf:pdf});});" +
                 "var more=!!d.querySelector('a[href*=\"/pageno/'+(page+1)+'\"]');" +
-                "return {rows:out,more:more};"
+                "return {rows:out,more:more,len:t.length,title:d.title};"
         val o = run(js) as JSONObject
         val a = o.getJSONArray("rows")
         val list = ArrayList<AsajDoc>()
@@ -207,11 +208,17 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
             val r = a.getJSONObject(i)
             list.add(AsajDoc(r.optString("type"), r.optString("number"), r.optString("date"), r.optString("gross"), r.optString("pdf")))
         }
+        if (list.isEmpty() && page == 1) {
+            throw IOException(
+                "Lista dokumentów jest pusta (strona: „" + o.optString("title").take(40) + "”, " +
+                    o.optInt("len") + " B). Sesja mogła nie zadziałać."
+            )
+        }
         list to o.optBoolean("more", false)
     }
 
     /** Linie ze strony "Moje dane", w których występuje słowo "limit" (do wyłuskania dostępnego limitu). */
-    suspend fun limitLines(): List<String> = lock.withLock {
+    suspend fun limitLines(): Pair<List<String>, String> = lock.withLock {
         val js =
             "var r=await fetch('/moje-konto/person-data',{credentials:'same-origin'});" +
                 "if(r.url.indexOf('/login')>=0) throw new Error('Sesja wygasła');" +
@@ -224,9 +231,11 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
                 "if(el.children.length<=4) add(el.textContent);" +
                 "if((tag==='INPUT'||tag==='TEXTAREA')&&el.value){" +
                 "var c=el.closest('tr,li,p,div,label'); add((c?c.textContent:'')+' '+el.value); }});" +
-                "return out.slice(0,15);"
-        val a = run(js) as org.json.JSONArray
-        (0 until a.length()).map { a.getString(it) }
+                "return {lines:out.slice(0,15),len:t.length,title:d.title};"
+        val o = run(js) as JSONObject
+        val a = o.getJSONArray("lines")
+        val lines = (0 until a.length()).map { a.getString(it) }
+        lines to ("„" + o.optString("title").take(40) + "”, " + o.optInt("len") + " B")
     }
 
     /** Pobiera PDF jako bajty. Przy wygasłej sesji loguje się ponownie i próbuje jeszcze raz. */
@@ -309,6 +318,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var limit by remember { mutableStateOf<String?>(null) }
     var limitChecked by remember { mutableStateOf(false) }
+    var limitNote by remember { mutableStateOf("") }
     var docs by remember { mutableStateOf<List<AsajDoc>>(emptyList()) }
     var page by remember { mutableStateOf(0) }
     var hasMore by remember { mutableStateOf(false) }
@@ -333,12 +343,30 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 status = "Logowanie…"
                 session.login(c.first, c.second)
                 status = "Pobieranie dokumentów…"
-                val (list, more) = session.docs(1)
-                docs = list
-                page = 1
+                val first = session.docs(1)
+                var all = first.first
+                var p = 1
+                var more = first.second
+                // Lista nie jest filtrowana na serwerze, więc dociągamy strony, aż będzie dość WZ.
+                while (more && p < 5 && all.count { it.type.equals("WZ", ignoreCase = true) } < 15) {
+                    val n = session.docs(p + 1)
+                    all = all + n.first
+                    p += 1
+                    more = n.second
+                }
+                docs = all
+                page = p
                 hasMore = more
                 status = "Pobieranie limitu…"
-                limit = try { pickLimit(session.limitLines()) } catch (e: CancellationException) { throw e } catch (e: Exception) { null }
+                val (lines, diag) = try {
+                    session.limitLines()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    emptyList<String>() to ("błąd: " + e.message)
+                }
+                limit = pickLimit(lines)
+                limitNote = "Strona Moje dane: " + diag + ", linii z „limit”: " + lines.size
                 limitChecked = true
             } catch (e: CancellationException) {
                 throw e
@@ -357,9 +385,20 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
             busy = true
             error = null
             try {
-                val (list, more) = session.docs(page + 1)
-                docs = docs + list.filter { n -> docs.none { it.pdfUrl == n.pdfUrl } }
-                page += 1
+                var all = docs
+                var p = page
+                var more = hasMore
+                var added = 0
+                while (more && p < page + 5 && added < 10) {
+                    val n = session.docs(p + 1)
+                    val fresh = n.first.filter { x -> all.none { it.pdfUrl == x.pdfUrl && it.number == x.number } }
+                    added += fresh.count { it.type.equals("WZ", ignoreCase = true) }
+                    all = all + fresh
+                    p += 1
+                    more = n.second
+                }
+                docs = all
+                page = p
                 hasMore = more
             } catch (e: CancellationException) {
                 throw e
@@ -438,6 +477,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                             docs = docs,
                             limit = limit,
                             limitChecked = limitChecked,
+                            limitNote = limitNote,
                             busy = busy,
                             status = status,
                             error = error,
@@ -463,6 +503,7 @@ private fun AsajBody(
     docs: List<AsajDoc>,
     limit: String?,
     limitChecked: Boolean,
+    limitNote: String,
     busy: Boolean,
     status: String,
     error: String?,
@@ -490,6 +531,7 @@ private fun AsajBody(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
+                    if (limit == null && limitNote.isNotEmpty()) SubText(limitNote)
                     if (status.isNotEmpty()) SubText(status)
                     if (error != null) Text(error, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
                     Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
