@@ -251,6 +251,25 @@ fun RadioScreen(onBack: () -> Unit) {
         error = false
     }
 
+    // Ulubione trzymają adres z chwili dodania – odświeżamy go z radio-browser po nazwie stacji
+    fun refreshFavs() {
+        scope.launch {
+            status = "Odświeżam ulubione…"
+            var updated = 0
+            val newList = withContext(Dispatchers.IO) {
+                favs.toList().map { f ->
+                    val found = searchStations(f.name, false)
+                        ?.firstOrNull { it.name.equals(f.name, ignoreCase = true) }
+                    if (found != null && found.url != f.url) { updated++; found } else f
+                }
+            }
+            favs.clear()
+            favs.addAll(newList)
+            Prefs.setFavorites(ctx, newList)
+            status = if (updated > 0) "Zaktualizowano adresy: $updated" else "Adresy są aktualne."
+        }
+    }
+
     fun toggleFav(s: Station) {
         val existing = favs.firstOrNull { it.url == s.url }
         if (existing != null) favs.remove(existing) else favs.add(s)
@@ -334,6 +353,10 @@ fun RadioScreen(onBack: () -> Unit) {
                         modifier = Modifier.weight(1f),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
+                        item {
+                            TextButton(onClick = { refreshFavs() }) { Text("↻ Odśwież adresy stacji") }
+                        }
+                        if (status.isNotEmpty()) item { SubText(status) }
                         if (favs.isEmpty()) {
                             item { SubText("Brak ulubionych. Dotknij ☆ przy stacji, żeby dodać.") }
                         }
