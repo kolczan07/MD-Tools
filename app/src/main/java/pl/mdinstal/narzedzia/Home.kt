@@ -137,7 +137,7 @@ private fun ToolTile(t: Tile, modifier: Modifier, onClick: () -> Unit) {
                         painter = painterResource(t.logo),
                         contentDescription = t.title,
                         contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 6.dp)
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 2.dp)
                     )
                 }
             } else {

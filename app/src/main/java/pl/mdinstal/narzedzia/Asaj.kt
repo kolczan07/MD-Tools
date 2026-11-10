@@ -88,6 +88,9 @@ class AsajDoc(val type: String, val number: String, val date: String, val gross:
         get() = number.replace(Regex("[^A-Za-z0-9]+"), "-").trim('-') + "_" + date.trim() + ".pdf"
 }
 
+/** Limit kredytowy: wartość dostępna (główna), nadana, pozostałe środki i termin płatności. */
+class AsajLimit(val usable: String, val granted: String, val remaining: String, val term: String)
+
 /** Odbiera wyniki skryptów JS z WebView (jedno wywołanie = jeden identyfikator). */
 private class AsajBridge {
     private val pending = ConcurrentHashMap<String, CompletableDeferred<String>>()
@@ -217,25 +220,18 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
         list to o.optBoolean("more", false)
     }
 
-    /** Linie ze strony "Moje dane", w których występuje słowo "limit" (do wyłuskania dostępnego limitu). */
-    suspend fun limitLines(): Pair<List<String>, String> = lock.withLock {
+    /** Limit kredytowy ze strony "Moje dane" (pola formularza prs_tradecredit_*). */
+    suspend fun limitInfo(): AsajLimit = lock.withLock {
         val js =
             "var r=await fetch('/moje-konto/person-data',{credentials:'same-origin'});" +
                 "if(r.url.indexOf('/login')>=0) throw new Error('Sesja wygasła');" +
                 "var t=await r.text(); var d=new DOMParser().parseFromString(t,'text/html');" +
-                "var seen={}, out=[];" +
-                "function add(s){ s=(s||'').replace(/\\s+/g,' ').trim(); if(s.length<4||s.length>200||seen[s]) return;" +
-                "if(!/limit/i.test(s)) return; seen[s]=1; out.push(s); }" +
-                "d.querySelectorAll('body *').forEach(function(el){" +
-                "var tag=el.tagName; if(tag==='SCRIPT'||tag==='STYLE'||tag==='NOSCRIPT') return;" +
-                "if(el.children.length<=4) add(el.textContent);" +
-                "if((tag==='INPUT'||tag==='TEXTAREA')&&el.value){" +
-                "var c=el.closest('tr,li,p,div,label'); add((c?c.textContent:'')+' '+el.value); }});" +
-                "return {lines:out.slice(0,15),len:t.length,title:d.title};"
+                "function v(id){var e=d.getElementById(id);" +
+                "return e?(e.value||e.getAttribute('value')||'').replace(/\\s+/g,' ').trim():'';}" +
+                "return {granted:v('prs_tradecredit_amount'),usable:v('prs_tradecredit_amount_to_use')," +
+                "remaining:v('prs_tradecredit_available_amount'),term:v('prs_tradecredit_end_date')};"
         val o = run(js) as JSONObject
-        val a = o.getJSONArray("lines")
-        val lines = (0 until a.length()).map { a.getString(it) }
-        lines to ("„" + o.optString("title").take(40) + "”, " + o.optInt("len") + " B")
+        AsajLimit(o.optString("usable"), o.optString("granted"), o.optString("remaining"), o.optString("term"))
     }
 
     /** Pobiera PDF jako bajty. Przy wygasłej sesji loguje się ponownie i próbuje jeszcze raz. */
@@ -256,17 +252,6 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
         if (!o.optBoolean("pdf")) throw IOException("Serwer nie zwrócił pliku PDF (HTTP ${o.optInt("status")}).")
         Base64.decode(o.getString("b64"), Base64.DEFAULT)
     }
-}
-
-private val AMOUNT = Regex("""-?\d[\d  .]*,\d{2}""")
-
-/** Z linii ze strony "Moje dane" wybiera tę, która wygląda na dostępny limit (z kwotą). */
-private fun pickLimit(lines: List<String>): String? {
-    val withAmount = lines.filter { AMOUNT.containsMatchIn(it) }
-    val best = withAmount.firstOrNull { it.contains("dostęp", ignoreCase = true) }
-        ?: withAmount.firstOrNull { it.contains("limit", ignoreCase = true) }
-        ?: return null
-    return best.replace(' ', ' ').take(120)
 }
 
 private fun asajDir(ctx: Context): File = File(ctx.cacheDir, "pdf/asaj").apply { mkdirs() }
@@ -316,16 +301,19 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    var limit by remember { mutableStateOf<String?>(null) }
+    var limit by remember { mutableStateOf<AsajLimit?>(null) }
     var limitChecked by remember { mutableStateOf(false) }
-    var limitNote by remember { mutableStateOf("") }
     var docs by remember { mutableStateOf<List<AsajDoc>>(emptyList()) }
     var page by remember { mutableStateOf(0) }
     var hasMore by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
-    var showAll by remember { mutableStateOf(false) }
+    var showWz by remember { mutableStateOf(true) }
+    var showFv by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Pair<AsajDoc, File>?>(null) }
     var opening by remember { mutableStateOf<String?>(null) }
+
+    fun sel(d: AsajDoc): Boolean =
+        (showWz && d.type.equals("WZ", ignoreCase = true)) || (showFv && d.type.equals("FV", ignoreCase = true))
 
     fun unlock() {
         authenticate(activity, "Asaj", "Potwierdź tożsamość") { ok ->
@@ -347,8 +335,8 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 var all = first.first
                 var p = 1
                 var more = first.second
-                // Lista nie jest filtrowana na serwerze, więc dociągamy strony, aż będzie dość WZ.
-                while (more && p < 5 && all.count { it.type.equals("WZ", ignoreCase = true) } < 15) {
+                // Lista nie jest filtrowana na serwerze, więc dociągamy strony, aż będzie dość wybranych dokumentów.
+                while (more && p < 5 && all.count { sel(it) } < 15) {
                     val n = session.docs(p + 1)
                     all = all + n.first
                     p += 1
@@ -358,15 +346,13 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 page = p
                 hasMore = more
                 status = "Pobieranie limitu…"
-                val (lines, diag) = try {
-                    session.limitLines()
+                limit = try {
+                    session.limitInfo()
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    emptyList<String>() to ("błąd: " + e.message)
+                    null
                 }
-                limit = pickLimit(lines)
-                limitNote = "Strona Moje dane: " + diag + ", linii z „limit”: " + lines.size
                 limitChecked = true
             } catch (e: CancellationException) {
                 throw e
@@ -392,7 +378,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 while (more && p < page + 5 && added < 10) {
                     val n = session.docs(p + 1)
                     val fresh = n.first.filter { x -> all.none { it.pdfUrl == x.pdfUrl && it.number == x.number } }
-                    added += fresh.count { it.type.equals("WZ", ignoreCase = true) }
+                    added += fresh.count { sel(it) }
                     all = all + fresh
                     p += 1
                     more = n.second
@@ -438,6 +424,10 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     LaunchedEffect(unlocked) {
         if (unlocked && hasCreds) reload()
     }
+    // Zmiana wyboru WZ/FV: jeśli na wczytanych stronach jest mało takich dokumentów, dociągamy starsze.
+    LaunchedEffect(showWz, showFv) {
+        if (unlocked && docs.isNotEmpty() && hasMore && !busy && docs.count { sel(it) } < 10) loadMore()
+    }
     DisposableEffect(Unit) {
         onDispose {
             web.stopLoading()
@@ -477,7 +467,6 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                             docs = docs,
                             limit = limit,
                             limitChecked = limitChecked,
-                            limitNote = limitNote,
                             busy = busy,
                             status = status,
                             error = error,
@@ -485,8 +474,16 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                             hasMore = hasMore,
                             query = query,
                             onQuery = { query = it },
-                            showAll = showAll,
-                            onShowAll = { showAll = it },
+                            showWz = showWz,
+                            onShowWz = { v ->
+                                showWz = v
+                                if (!v && !showFv) showFv = true
+                            },
+                            showFv = showFv,
+                            onShowFv = { v ->
+                                showFv = v
+                                if (!v && !showWz) showWz = true
+                            },
                             onRefresh = { reload() },
                             onMore = { loadMore() },
                             onOpen = { openPdf(it) }
@@ -501,9 +498,8 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
 @Composable
 private fun AsajBody(
     docs: List<AsajDoc>,
-    limit: String?,
+    limit: AsajLimit?,
     limitChecked: Boolean,
-    limitNote: String,
     busy: Boolean,
     status: String,
     error: String?,
@@ -511,33 +507,46 @@ private fun AsajBody(
     hasMore: Boolean,
     query: String,
     onQuery: (String) -> Unit,
-    showAll: Boolean,
-    onShowAll: (Boolean) -> Unit,
+    showWz: Boolean,
+    onShowWz: (Boolean) -> Unit,
+    showFv: Boolean,
+    onShowFv: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onMore: () -> Unit,
     onOpen: (AsajDoc) -> Unit
 ) {
     val q = query.trim()
-    val shown = docs.filter { (showAll || it.type.equals("WZ", ignoreCase = true)) && (q.isEmpty() || it.number.contains(q, ignoreCase = true)) }
+    val shown = docs.filter {
+        ((showWz && it.type.equals("WZ", ignoreCase = true)) || (showFv && it.type.equals("FV", ignoreCase = true))) &&
+            (q.isEmpty() || it.number.contains(q, ignoreCase = true))
+    }
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             AppCard(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Dostępny limit", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val usable = limit?.usable.orEmpty()
                     Text(
-                        limit ?: if (limitChecked) "nie znaleziono na stronie „Moje dane”" else "—",
-                        fontSize = if (limit != null) 20.sp else 14.sp,
+                        if (usable.isNotBlank()) usable else if (limitChecked) "nie udało się odczytać z „Moje dane”" else "—",
+                        fontSize = if (usable.isNotBlank()) 22.sp else 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    if (limit == null && limitNote.isNotEmpty()) SubText(limitNote)
+                    if (limit != null && usable.isNotBlank()) {
+                        SubText(
+                            "Nadany: ${limit.granted} · Pozostałe środki: ${limit.remaining}" +
+                                if (limit.term.isNotBlank()) " · Termin: ${limit.term}" else ""
+                        )
+                    }
                     if (status.isNotEmpty()) SubText(status)
                     if (error != null) Text(error, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
                     Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedButton(enabled = !busy, onClick = onRefresh) { Text(if (busy) "Chwila…" else "Odśwież") }
-                        Checkbox(checked = showAll, onCheckedChange = onShowAll, modifier = Modifier.padding(start = 8.dp))
-                        Text("też faktury", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Checkbox(checked = showWz, onCheckedChange = onShowWz, modifier = Modifier.padding(start = 8.dp))
+                        Text("WZ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Checkbox(checked = showFv, onCheckedChange = onShowFv)
+                        Text("FV", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
