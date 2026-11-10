@@ -77,12 +77,20 @@ import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 private const val ASAJ = "https://www.asaj.pl"
 
 /** Jeden wiersz z listy dokumentów handlowych. */
-class AsajDoc(val type: String, val number: String, val date: String, val gross: String, val pdfUrl: String) {
+class AsajDoc(
+    val type: String,
+    val number: String,
+    val date: String,
+    val gross: String,
+    val pdfUrl: String,
+    val net: String = ""
+) {
     /** Nazwa pliku z numerem i datą wystawienia, np. WZ-7638-2026-AA_2026-11-09.pdf */
     val fileName: String
         get() = number.replace(Regex("[^A-Za-z0-9]+"), "-").trim('-') + "_" + date.trim() + ".pdf"
@@ -200,8 +208,9 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
                 "if((a.getAttribute('title')||'')==='Pobierz PDF') pdf=a.getAttribute('href')||''; });" +
                 "var sp=td[5].querySelectorAll('span');" +
                 "var g=(sp.length>1?sp[1].textContent:td[5].textContent).replace(/\\s+/g,' ').trim();" +
+                "var n=(sp.length>1?sp[0].textContent:'').replace(/\\s+/g,' ').trim();" +
                 "out.push({type:td[0].textContent.trim(),number:td[1].textContent.trim()," +
-                "date:td[2].textContent.trim(),gross:g,pdf:pdf});});" +
+                "date:td[2].textContent.trim(),gross:g,net:n,pdf:pdf});});" +
                 "var more=!!d.querySelector('a[href*=\"/pageno/'+(page+1)+'\"]');" +
                 "return {rows:out,more:more,len:t.length,title:d.title};"
         val o = run(js) as JSONObject
@@ -209,7 +218,7 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
         val list = ArrayList<AsajDoc>()
         for (i in 0 until a.length()) {
             val r = a.getJSONObject(i)
-            list.add(AsajDoc(r.optString("type"), r.optString("number"), r.optString("date"), r.optString("gross"), r.optString("pdf")))
+            list.add(AsajDoc(r.optString("type"), r.optString("number"), r.optString("date"), r.optString("gross"), r.optString("pdf"), r.optString("net")))
         }
         if (list.isEmpty() && page == 1) {
             throw IOException(
@@ -252,6 +261,20 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
         if (!o.optBoolean("pdf")) throw IOException("Serwer nie zwrócił pliku PDF (HTTP ${o.optInt("status")}).")
         Base64.decode(o.getString("b64"), Base64.DEFAULT)
     }
+}
+
+/** Suma WZ od ostatniej FV (włącznie z WZ z dnia wystawienia tej FV: lepiej mieć zapas niż niedobór). */
+private class WzSum(val fvNumber: String, val fvDate: String, val count: Int, val gross: Double, val net: Double)
+
+private fun parseAmount(s: String): Double =
+    s.replace(Regex("[^0-9,\\-]"), "").replace(',', '.').toDoubleOrNull() ?: 0.0
+
+private fun fmtAmount(v: Double): String = String.format(Locale("pl", "PL"), "%,.2f zł", v)
+
+private fun sumSinceLastFv(docs: List<AsajDoc>): WzSum? {
+    val fv = docs.filter { it.type.equals("FV", ignoreCase = true) }.maxByOrNull { it.date } ?: return null
+    val wz = docs.filter { it.type.equals("WZ", ignoreCase = true) && it.date >= fv.date }
+    return WzSum(fv.number, fv.date, wz.size, wz.sumOf { parseAmount(it.gross) }, wz.sumOf { parseAmount(it.net) })
 }
 
 private fun asajDir(ctx: Context): File = File(ctx.cacheDir, "pdf/asaj").apply { mkdirs() }
@@ -336,7 +359,8 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 var p = 1
                 var more = first.second
                 // Lista nie jest filtrowana na serwerze, więc dociągamy strony, aż będzie dość wybranych dokumentów.
-                while (more && p < 5 && all.count { sel(it) } < 15) {
+                // Dociągamy też do pierwszej FV, bo od niej liczymy sumę WZ.
+                while (more && p < 8 && (all.count { sel(it) } < 15 || all.none { it.type.equals("FV", ignoreCase = true) })) {
                     val n = session.docs(p + 1)
                     all = all + n.first
                     p += 1
@@ -538,6 +562,22 @@ private fun AsajBody(
                             "Nadany: ${limit.granted} · Pozostałe środki: ${limit.remaining}" +
                                 if (limit.term.isNotBlank()) " · Termin: ${limit.term}" else ""
                         )
+                    }
+                    val sum = remember(docs) { sumSinceLastFv(docs) }
+                    if (sum != null) {
+                        Text(
+                            "WZ od ostatniej FV: " + fmtAmount(sum.gross) + " brutto",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        SubText(
+                            fmtAmount(sum.net) + " netto · " + sum.count + " WZ od " + sum.fvDate +
+                                " (FV " + sum.fvNumber + ", z WZ z tego dnia)"
+                        )
+                    } else if (docs.isNotEmpty()) {
+                        SubText("Brak FV na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
                     }
                     if (status.isNotEmpty()) SubText(status)
                     if (error != null) Text(error, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
