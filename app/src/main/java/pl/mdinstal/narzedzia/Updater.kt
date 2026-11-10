@@ -36,6 +36,13 @@ import java.net.URL
 
 data class UpdateInfo(val version: String, val url: String, val notes: String, val size: Long)
 
+// Usuwa z notatek wydania linię "Full Changelog: ..." dopisywaną automatycznie przez GitHub
+private fun cleanNotes(body: String): String =
+    body.lines()
+        .filterNot { it.contains("Full Changelog", ignoreCase = true) }
+        .joinToString("\n")
+        .trim()
+
 /** Aktualizacje z GitHub Releases (repo publiczne — na sztywno kolczan07/MD-Tools). */
 object Updater {
     private const val REPO = "kolczan07/MD-Tools"
@@ -57,7 +64,7 @@ object Updater {
             val a = assets.getJSONObject(i)
             val name = a.optString("name")
             if (!name.endsWith(".apk", ignoreCase = true)) continue
-            val info = UpdateInfo(tag, a.getString("browser_download_url"), json.optString("body"), a.optLong("size"))
+            val info = UpdateInfo(tag, a.getString("browser_download_url"), cleanNotes(json.optString("body")), a.optLong("size"))
             val isDebug = name.contains("debug", ignoreCase = true)
             if (debug) {
                 if (isDebug) return info
