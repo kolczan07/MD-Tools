@@ -419,8 +419,17 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
     var frames by remember(pump.serial) { mutableStateOf<List<LiveFrame>>(emptyList()) }
     var chartSel by remember(pump.serial) { mutableStateOf<Set<String>>(emptySet()) }
     val pausedNow by rememberUpdatedState(paused)
+    val liveNow by rememberUpdatedState(liveMode)
+    // Jednorazowy odczyt ze strumienia przy otwarciu i po "Odśwież": analogi nie są w stanie z API.
+    var snapshot by remember(pump.serial) { mutableStateOf(true) }
     val effective: Map<String, Any?> = remember(detail, live) { (detail?.current ?: emptyMap()) + live }
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(reload, tokenOk) {
+        snapshot = true
+        delay(30_000)
+        snapshot = false
+    }
 
     LaunchedEffect(tokenOk, reload) {
         if (!tokenOk || pump.id <= 0L) return@LaunchedEffect
@@ -451,7 +460,7 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
         }
 
         val streamToken = IgluToken.token
-        if (liveMode && tokenOk && streamToken != null && pump.id > 0L) {
+        if ((liveMode || snapshot) && tokenOk && streamToken != null && pump.id > 0L) {
             // Klucz = token: po odnowieniu tokenu strumień łączy się od nowa.
             key(streamToken) {
                 LiveStreamView(
@@ -460,8 +469,9 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                     onParams = {
                         if (!pausedNow) {
                             live = live + it
-                            frames = appendFrame(frames, it)
+                            if (liveNow) frames = appendFrame(frames, it)
                         }
+                        snapshot = false
                     },
                     onStatus = { liveStatus = it }
                 )
@@ -621,7 +631,7 @@ private fun DetailBody(
     val q = query.trim().lowercase()
     val groups = remember(d, current.size) {
         d.params
-            .filter { current.containsKey(it.keyword) }
+            .filter { current.containsKey(it.keyword) || it.group.equals("Analogs", ignoreCase = true) }
             .groupBy { it.group }
             .entries
             .sortedBy { e -> e.value.first().groupOrder }
