@@ -162,6 +162,14 @@ object IgluApi {
         }
     }
 
+    /**
+     * Prosi pompę o świeże dane: GET devices/{id}/request (pusta odpowiedź 200). Portal woła to przy otwarciu
+     * pompy i co sekundę w trybie Live; ramka ze strumienia z analogami przychodzi zaraz po tym wywołaniu.
+     */
+    fun requestData(id: Long, token: String) {
+        get("$BASE/devices/$id/request", token)
+    }
+
     /** Opis parametrów (słowo kluczowe, jednostka, dostęp RW/R, grupa, lista wartości). Po numerze seryjnym. */
     fun config(serial: String, token: String): JSONArray =
         JSONObject(get("$BASE/devices/$serial/config/render", token)).getJSONArray("parameters")

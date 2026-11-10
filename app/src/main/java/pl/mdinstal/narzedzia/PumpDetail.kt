@@ -188,6 +188,9 @@ private class LiveFrame(val t: Long, val values: Map<String, Double>)
 /** Ile historii trzymamy w pamięci dla wykresów trybu Live. */
 private const val LIVE_WINDOW_MS = 10 * 60 * 1000L
 
+/** Co ile ms w trybie Live prosimy pompę o świeżą ramkę (portal robi to co 1 s, my rzadziej, żeby nie męczyć serwera). */
+private const val LIVE_POLL_MS = 5_000L
+
 private fun appendFrame(old: List<LiveFrame>, p: Map<String, Any?>): List<LiveFrame> {
     val now = System.currentTimeMillis()
     val vals = LinkedHashMap<String, Double>()
@@ -431,6 +434,23 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
         snapshot = false
     }
 
+    // Analogów nie ma w /state: przychodzą tylko ramką ze strumienia, a ta przychodzi po GET devices/{id}/request.
+    // Przy jednorazowym odczycie prosimy raz (z ponowieniem co 6 s do skutku), w trybie Live co LIVE_POLL_MS.
+    val streaming = (liveMode || snapshot) && tokenOk && pump.id > 0L
+    LaunchedEffect(streaming, liveMode, paused) {
+        if (!streaming || (liveMode && paused)) return@LaunchedEffect
+        delay(1500)
+        while (true) {
+            val token = IgluToken.token ?: break
+            try {
+                withContext(Dispatchers.IO) { IgluApi.requestData(pump.id, token) }
+            } catch (e: Exception) {
+                if (e.message?.contains("401") == true) break
+            }
+            delay(if (liveMode) LIVE_POLL_MS else 6_000L)
+        }
+    }
+
     LaunchedEffect(tokenOk, reload) {
         if (!tokenOk || pump.id <= 0L) return@LaunchedEffect
         val token = IgluToken.token ?: return@LaunchedEffect
@@ -541,7 +561,7 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                         onEdit = { editing = it },
                         saveMsg = saveMsg,
                         current = effective,
-                        liveStatus = liveStatus,
+                        liveStatus = liveStatus.ifBlank { "—" } + " · odebrane: ${live.size} param.",
                         liveMode = liveMode,
                         onToggleLive = {
                             liveMode = !liveMode
@@ -673,7 +693,7 @@ private fun DetailBody(
                         Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                     }
                     Text(
-                        "Na żywo: ${liveStatus.ifBlank { "—" }} · ze strumienia: ${current.size} param." +
+                        "Na żywo: ${liveStatus.ifBlank { "—" }}" +
                             if (liveMode) " · ramek: ${frames.size}" +
                                 (frames.lastOrNull()?.let { " · ostatnia: ${clockText(it.t)}" } ?: "") else "",
                         fontSize = 13.sp,
