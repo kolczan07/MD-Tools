@@ -3,7 +3,14 @@ package pl.mdinstal.narzedzia
 import android.Manifest
 import android.content.ComponentName
 import android.content.pm.PackageManager
+import android.annotation.SuppressLint
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -61,6 +68,9 @@ import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.URLEncoder
@@ -148,6 +158,36 @@ private fun searchStations(query: String, onlyPl: Boolean): List<Station>? {
     return null
 }
 
+
+// getradio.reconv.pl odrzuca zapytania spoza przeglądarki (403) i dopiero przekierowuje na m3u8 z tokenem.
+// Wykonujemy to przekierowanie w ukrytym WebView (jak Chrome) i przechwytujemy docelowy adres.
+@SuppressLint("SetJavaScriptEnabled")
+private suspend fun resolveRedirect(ctx: android.content.Context, url: String): String? =
+    withTimeoutOrNull(12000) {
+        suspendCancellableCoroutine<String?> { cont ->
+            val wv = WebView(ctx)
+            val main = Handler(Looper.getMainLooper())
+            fun finish(result: String?) {
+                if (cont.isActive) cont.resume(result)
+                main.post { try { wv.stopLoading(); wv.destroy() } catch (e: Exception) { } }
+            }
+            wv.settings.javaScriptEnabled = true
+            wv.setDownloadListener { u, _, _, _, _ -> finish(u) }
+            wv.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    val u = request.url.toString()
+                    if (u != url) { finish(u); return true }
+                    return false
+                }
+                override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, errorResponse: WebResourceResponse) {
+                    if (request.isForMainFrame) finish(null)
+                }
+            }
+            cont.invokeOnCancellation { main.post { try { wv.destroy() } catch (e: Exception) { } } }
+            wv.loadUrl(url)
+        }
+    }
+
 @Composable
 fun RadioScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -223,16 +263,21 @@ fun RadioScreen(onBack: () -> Unit) {
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         error = false
-        nowUrl = s.url
-        c.setMediaItem(
-            MediaItem.Builder()
-                .setUri(s.url)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-Tools Radio").build())
-                .build()
-        )
-        c.prepare()
-        c.play()
         nowName = s.name
+        nowUrl = s.url
+        scope.launch {
+            val host = try { android.net.Uri.parse(s.url).host.orEmpty() } catch (e: Exception) { "" }
+            val real = if (host.endsWith("reconv.pl")) (resolveRedirect(ctx, s.url) ?: s.url) else s.url
+            nowUrl = real
+            c.setMediaItem(
+                MediaItem.Builder()
+                    .setUri(real)
+                    .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-Tools Radio").build())
+                    .build()
+            )
+            c.prepare()
+            c.play()
+        }
     }
 
     fun togglePlay() {
