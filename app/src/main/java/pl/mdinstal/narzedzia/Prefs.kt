@@ -81,6 +81,28 @@ object Prefs {
     }
 
     fun clearCreds(c: Context) {
-        secure(c)?.edit()?.clear()?.apply()
+        secure(c)?.edit()?.remove("user")?.remove("pass")?.remove("remember")?.apply()
+    }
+
+    // ---- Dane logowania Asaj (asaj.pl): ten sam szyfrowany magazyn, osobne klucze ----
+    fun asajUser(c: Context): String = secure(c)?.getString("asaj_user", "") ?: ""
+
+    /** login, hasło — albo null, gdy nic nie zapisano. */
+    fun asajCreds(c: Context): Pair<String, String>? {
+        val s = secure(c) ?: return null
+        val u = s.getString("asaj_user", null) ?: return null
+        val p = s.getString("asaj_pass", null) ?: return null
+        if (u.isEmpty() || p.isEmpty()) return null
+        return u to p
+    }
+
+    fun saveAsajCreds(c: Context, user: String, pass: String): Boolean {
+        val s = secure(c) ?: return false
+        s.edit().putString("asaj_user", user).putString("asaj_pass", pass).apply()
+        return true
+    }
+
+    fun clearAsajCreds(c: Context) {
+        secure(c)?.edit()?.remove("asaj_user")?.remove("asaj_pass")?.apply()
     }
 }

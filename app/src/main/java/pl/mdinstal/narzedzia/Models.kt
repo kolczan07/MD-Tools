@@ -10,7 +10,7 @@ import java.util.Locale
 
 enum class Screen {
     Home, Radio, Network, Speedtest, Wifi, Lan, Arp, Weather, Iglutech,
-    Shortcuts, Settings, IgluSettings, About, Schematic, Protocol
+    Shortcuts, Settings, IgluSettings, About, Schematic, Protocol, Asaj, AsajSettings
 }
 
 data class Station(val name: String, val url: String)

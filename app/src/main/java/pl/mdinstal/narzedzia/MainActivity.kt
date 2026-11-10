@@ -150,6 +150,8 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 Screen.Shortcuts -> ShortcutsScreen(onBack = { back() })
                 Screen.Settings -> SettingsScreen(themeMode, onTheme, onBack = { back() }, onOpen = { go(it) })
                 Screen.IgluSettings -> IgluSettingsScreen(onBack = { back() })
+                Screen.Asaj -> AsajScreen(onBack = { back() }, onOpenSettings = { go(Screen.AsajSettings) })
+                Screen.AsajSettings -> AsajSettingsScreen(onBack = { back() })
                 Screen.About -> AboutScreen(onBack = { back() })
                 Screen.Schematic -> SchematicScreen(onBack = { back() })
                 Screen.Protocol -> ProtocolScreen(onBack = { back() })

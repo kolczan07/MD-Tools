@@ -42,6 +42,7 @@ private val tools = listOf(
     Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN, ARP", Screen.Network),
     Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
     Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null),
+    Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj),
     Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts)
 )
 
