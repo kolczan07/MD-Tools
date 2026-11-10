@@ -631,7 +631,7 @@ private fun DetailBody(
     val q = query.trim().lowercase()
     val groups = remember(d, current.size) {
         d.params
-            .filter { current.containsKey(it.keyword) || it.group.equals("Analogs", ignoreCase = true) }
+            .filter { current.containsKey(it.keyword) || it.group.contains("analog", ignoreCase = true) }
             .groupBy { it.group }
             .entries
             .sortedBy { e -> e.value.first().groupOrder }
@@ -673,7 +673,7 @@ private fun DetailBody(
                         Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                     }
                     Text(
-                        "Na żywo: ${liveStatus.ifBlank { "—" }}" +
+                        "Na żywo: ${liveStatus.ifBlank { "—" }} · ze strumienia: ${current.size} param." +
                             if (liveMode) " · ramek: ${frames.size}" +
                                 (frames.lastOrNull()?.let { " · ostatnia: ${clockText(it.t)}" } ?: "") else "",
                         fontSize = 13.sp,
