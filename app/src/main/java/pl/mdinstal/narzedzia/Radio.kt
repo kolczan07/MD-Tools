@@ -66,7 +66,12 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionToken
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -78,6 +83,19 @@ import java.net.URLEncoder
 class RadioService : MediaSessionService() {
 
     private var session: MediaSession? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var lastFetch = 0L
+
+    /** Wpisuje temperaturę zewnętrzną w pole album bieżącej stacji (trzecia linia w radiu samochodowym). */
+    private fun applyAlbum(p: androidx.media3.common.Player) {
+        val txt = OutdoorTemp.lastText ?: return
+        val cur = p.currentMediaItem ?: return
+        if (cur.mediaMetadata.albumTitle?.toString() == txt) return
+        p.replaceMediaItem(
+            p.currentMediaItemIndex,
+            cur.buildUpon().setMediaMetadata(cur.mediaMetadata.buildUpon().setAlbumTitle(txt).build()).build()
+        )
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -107,6 +125,22 @@ class RadioService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         session = MediaSession.Builder(this, player).build()
+
+        // Co 5 min (tylko gdy gra radio) odświeżamy temperaturę z pompy; metadane aktualizujemy bez przerywania dźwięku.
+        scope.launch {
+            while (isActive) {
+                delay(10_000)
+                val p = session?.player ?: continue
+                if (p.mediaItemCount == 0 || !p.playWhenReady) continue
+                val now = System.currentTimeMillis()
+                if (now - lastFetch > 5 * 60_000L) {
+                    lastFetch = now
+                    val t = try { OutdoorTemp.fetch(applicationContext) } catch (e: Exception) { null }
+                    if (t != null) OutdoorTemp.lastText = OutdoorTemp.format(t)
+                }
+                try { applyAlbum(p) } catch (e: Exception) { }
+            }
+        }
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
@@ -117,6 +151,7 @@ class RadioService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        scope.cancel()
         session?.let {
             it.player.release()
             it.release()
@@ -272,7 +307,13 @@ fun RadioScreen(onBack: () -> Unit) {
             c.setMediaItem(
                 MediaItem.Builder()
                     .setUri(real)
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(s.name).setArtist("MD-Radio").build())
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(s.name)
+                            .setArtist("MD-Radio")
+                            .setAlbumTitle(OutdoorTemp.lastText ?: "MD-Tools")
+                            .build()
+                    )
                     .build()
             )
             c.prepare()
