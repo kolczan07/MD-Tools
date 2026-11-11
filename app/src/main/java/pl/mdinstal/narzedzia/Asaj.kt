@@ -274,9 +274,13 @@ private fun parseAmount(s: String): Double =
 
 private fun fmtAmount(v: Double): String = String.format(Locale("pl", "PL"), "%,.2f zł", v)
 
+/** Faktura sprzedaży: Asaj oznacza ją jako FS (dopuszczamy też FV). */
+private fun isInvoice(d: AsajDoc): Boolean =
+    d.type.trim().equals("FS", ignoreCase = true) || d.type.trim().equals("FV", ignoreCase = true)
+
 /** FV, która liczy się jako punkt odniesienia dla sumy WZ (brutto co najmniej MIN_FV_GROSS). */
 private fun isCountedFv(d: AsajDoc): Boolean =
-    d.type.equals("FV", ignoreCase = true) && parseAmount(d.gross) >= MIN_FV_GROSS
+    isInvoice(d) && parseAmount(d.gross) >= MIN_FV_GROSS
 
 private fun sumSinceLastFv(docs: List<AsajDoc>): WzSum? {
     val fv = docs.filter { isCountedFv(it) }.maxByOrNull { it.date } ?: return null
@@ -360,7 +364,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     var opening by remember { mutableStateOf<String?>(null) }
 
     fun sel(d: AsajDoc): Boolean =
-        (showWz && d.type.equals("WZ", ignoreCase = true)) || (showFv && d.type.equals("FV", ignoreCase = true))
+        (showWz && d.type.equals("WZ", ignoreCase = true)) || (showFv && isInvoice(d))
 
     fun unlock() {
         authenticate(activity, "Asaj", "Potwierdź tożsamość") { ok ->
@@ -566,7 +570,7 @@ private fun AsajBody(
 ) {
     val q = query.trim()
     val shown = docs.filter {
-        ((showWz && it.type.equals("WZ", ignoreCase = true)) || (showFv && it.type.equals("FV", ignoreCase = true))) &&
+        ((showWz && it.type.equals("WZ", ignoreCase = true)) || (showFv && isInvoice(it))) &&
             (q.isEmpty() || it.number.contains(q, ignoreCase = true))
     }
 
@@ -591,7 +595,7 @@ private fun AsajBody(
                     val sum = remember(docs) { sumSinceLastFv(docs) }
                     if (sum != null) {
                         Text(
-                            "WZ od ostatniej FV: " + fmtAmount(sum.gross) + " brutto",
+                            "WZ od ostatniej FS: " + fmtAmount(sum.gross) + " brutto",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
@@ -599,10 +603,10 @@ private fun AsajBody(
                         )
                         SubText(
                             fmtAmount(sum.net) + " netto · " + sum.count + " WZ od " + sum.fvDate +
-                                " (FV " + sum.fvNumber + ", z WZ z tego dnia)"
+                                " (FS " + sum.fvNumber + ", z WZ z tego dnia)"
                         )
                     } else if (docs.isNotEmpty()) {
-                        SubText("Brak FV od ${fmtAmount(MIN_FV_GROSS)} na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
+                        SubText("Brak FS od ${fmtAmount(MIN_FV_GROSS)} na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
                     }
                     if (docs.isNotEmpty()) {
                         val ms = remember(docs, hasMore) { monthStats(docs, hasMore) }
@@ -625,7 +629,7 @@ private fun AsajBody(
                         Checkbox(checked = showWz, onCheckedChange = onShowWz, modifier = Modifier.padding(start = 8.dp))
                         Text("WZ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
                         Checkbox(checked = showFv, onCheckedChange = onShowFv)
-                        Text("FV", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                        Text("FS", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
