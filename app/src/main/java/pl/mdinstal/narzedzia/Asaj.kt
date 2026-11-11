@@ -276,8 +276,8 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
 /** FV poniżej tej kwoty brutto (zł) są pomijane przy liczeniu WZ: nie traktujemy ich jako rozliczenia. */
 private const val MIN_FV_GROSS = 1000.0
 
-/** Od tej sumy brutto WZ do zapłaty pokazujemy monit o spięciu WZ w FS (zbliżamy się do 14 tys. zł). */
-private const val WZ_WARN_GROSS = 12_000.0
+/** Od tej sumy brutto WZ do zapłaty pokazujemy monit o spięciu WZ w FS (limit płatności gotówką to 15 tys. zł, stąd 14 tys.). */
+private const val WZ_WARN_GROSS = 14_000.0
 
 /** Suma WZ do zapłaty: te, które na liście (od najnowszych) leżą nad ostatnią liczoną FS. Niżej są już rozliczone. */
 private class WzSum(val fvNumber: String, val fvDate: String, val count: Int, val gross: Double, val net: Double)
