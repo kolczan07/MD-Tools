@@ -263,6 +263,9 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
     }
 }
 
+/** FV poniżej tej kwoty brutto (zł) są pomijane przy liczeniu WZ: nie traktujemy ich jako rozliczenia. */
+private const val MIN_FV_GROSS = 1000.0
+
 /** Suma WZ od ostatniej FV (włącznie z WZ z dnia wystawienia tej FV: lepiej mieć zapas niż niedobór). */
 private class WzSum(val fvNumber: String, val fvDate: String, val count: Int, val gross: Double, val net: Double)
 
@@ -271,10 +274,31 @@ private fun parseAmount(s: String): Double =
 
 private fun fmtAmount(v: Double): String = String.format(Locale("pl", "PL"), "%,.2f zł", v)
 
+/** FV, która liczy się jako punkt odniesienia dla sumy WZ (brutto co najmniej MIN_FV_GROSS). */
+private fun isCountedFv(d: AsajDoc): Boolean =
+    d.type.equals("FV", ignoreCase = true) && parseAmount(d.gross) >= MIN_FV_GROSS
+
 private fun sumSinceLastFv(docs: List<AsajDoc>): WzSum? {
-    val fv = docs.filter { it.type.equals("FV", ignoreCase = true) }.maxByOrNull { it.date } ?: return null
+    val fv = docs.filter { isCountedFv(it) }.maxByOrNull { it.date } ?: return null
     val wz = docs.filter { it.type.equals("WZ", ignoreCase = true) && it.date >= fv.date }
     return WzSum(fv.number, fv.date, wz.size, wz.sumOf { parseAmount(it.gross) }, wz.sumOf { parseAmount(it.net) })
+}
+
+/** Statystyki WZ z jednego miesiąca kalendarzowego (month w formacie rrrr-MM). */
+private class MonthStats(val month: String, val count: Int, val gross: Double, val net: Double, val complete: Boolean)
+
+private fun currentMonth(): String =
+    java.text.SimpleDateFormat("yyyy-MM", Locale.US).format(java.util.Date())
+
+/** Czy wczytane strony sięgają początku miesiąca (są dokumenty z wcześniejszego miesiąca lub koniec listy). */
+private fun coversMonth(docs: List<AsajDoc>, month: String): Boolean =
+    docs.isNotEmpty() && docs.minOf { it.date.trim() } < "$month-01"
+
+private fun monthStats(docs: List<AsajDoc>, hasMore: Boolean): MonthStats {
+    val m = currentMonth()
+    val wz = docs.filter { it.type.equals("WZ", ignoreCase = true) && it.date.trim().startsWith(m) }
+    return MonthStats(m, wz.size, wz.sumOf { parseAmount(it.gross) }, wz.sumOf { parseAmount(it.net) },
+        complete = !hasMore || coversMonth(docs, m))
 }
 
 private fun asajDir(ctx: Context): File = File(ctx.cacheDir, "pdf/asaj").apply { mkdirs() }
@@ -359,8 +383,9 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 var p = 1
                 var more = first.second
                 // Lista nie jest filtrowana na serwerze, więc dociągamy strony, aż będzie dość wybranych dokumentów.
-                // Dociągamy też do pierwszej FV, bo od niej liczymy sumę WZ.
-                while (more && p < 8 && (all.count { sel(it) } < 15 || all.none { it.type.equals("FV", ignoreCase = true) })) {
+                // Dociągamy też do pierwszej FV (od 1000 zł) i do początku bieżącego miesiąca: od nich liczymy sumy WZ.
+                val month = currentMonth()
+                while (more && p < 8 && (all.count { sel(it) } < 15 || all.none { isCountedFv(it) } || !coversMonth(all, month))) {
                     val n = session.docs(p + 1)
                     all = all + n.first
                     p += 1
@@ -577,7 +602,21 @@ private fun AsajBody(
                                 " (FV " + sum.fvNumber + ", z WZ z tego dnia)"
                         )
                     } else if (docs.isNotEmpty()) {
-                        SubText("Brak FV na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
+                        SubText("Brak FV od ${fmtAmount(MIN_FV_GROSS)} na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
+                    }
+                    if (docs.isNotEmpty()) {
+                        val ms = remember(docs, hasMore) { monthStats(docs, hasMore) }
+                        Text(
+                            "WZ w tym miesiącu (" + ms.month + "): " + fmtAmount(ms.gross) + " brutto",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                        SubText(
+                            fmtAmount(ms.net) + " netto · " + ms.count + " WZ" +
+                                if (ms.complete) "" else " (niepełne: doczytaj starsze dokumenty)"
+                        )
                     }
                     if (status.isNotEmpty()) SubText(status)
                     if (error != null) Text(error, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
