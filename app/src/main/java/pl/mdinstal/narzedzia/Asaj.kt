@@ -266,6 +266,9 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
 /** FV poniżej tej kwoty brutto (zł) są pomijane przy liczeniu WZ: nie traktujemy ich jako rozliczenia. */
 private const val MIN_FV_GROSS = 1000.0
 
+/** Od tej sumy brutto WZ do zapłaty pokazujemy monit o spięciu WZ w FS (zbliżamy się do 14 tys. zł). */
+private const val WZ_WARN_GROSS = 12_000.0
+
 /** Suma WZ do zapłaty: te, które na liście (od najnowszych) leżą nad ostatnią liczoną FS. Niżej są już rozliczone. */
 private class WzSum(val fvNumber: String, val fvDate: String, val count: Int, val gross: Double, val net: Double)
 
@@ -369,6 +372,8 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     var showFv by remember { mutableStateOf(false) }
     var viewing by remember { mutableStateOf<Pair<AsajDoc, File>?>(null) }
     var opening by remember { mutableStateOf<String?>(null) }
+    var warnDismissed by remember { mutableStateOf(false) }
+    val unpaid = remember(docs) { sumSinceLastFv(docs) }
 
     fun sel(d: AsajDoc): Boolean =
         (showWz && d.type.equals("WZ", ignoreCase = true)) || (showFv && isInvoice(d))
@@ -551,6 +556,15 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                     }
                 }
             }
+        }
+
+        if (unlocked && !busy && !warnDismissed && viewing == null && unpaid != null && unpaid.gross >= WZ_WARN_GROSS) {
+            AlertDialog(
+                onDismissRequest = { warnDismissed = true },
+                title = { Text("Asaj: WZ do zapłaty") },
+                text = { Text("Masz " + fmtAmount(unpaid.gross) + " do zapłaty. Skontaktuj się w celu spięcia WZ.") },
+                confirmButton = { TextButton(onClick = { warnDismissed = true }) { Text("OK") } }
+            )
         }
     }
 }
