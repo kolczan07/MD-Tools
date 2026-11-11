@@ -266,7 +266,7 @@ private class AsajSession(private val web: WebView, private val bridge: AsajBrid
 /** FV poniżej tej kwoty brutto (zł) są pomijane przy liczeniu WZ: nie traktujemy ich jako rozliczenia. */
 private const val MIN_FV_GROSS = 1000.0
 
-/** Suma WZ od ostatniej FV (włącznie z WZ z dnia wystawienia tej FV: lepiej mieć zapas niż niedobór). */
+/** Suma WZ do zapłaty: te, które na liście (od najnowszych) leżą nad ostatnią liczoną FS. Niżej są już rozliczone. */
 private class WzSum(val fvNumber: String, val fvDate: String, val count: Int, val gross: Double, val net: Double)
 
 private fun parseAmount(s: String): Double =
@@ -275,16 +275,23 @@ private fun parseAmount(s: String): Double =
 private fun fmtAmount(v: Double): String = String.format(Locale("pl", "PL"), "%,.2f zł", v)
 
 /** Faktura sprzedaży: Asaj oznacza ją jako FS (dopuszczamy też FV). */
-private fun isInvoice(d: AsajDoc): Boolean =
-    d.type.trim().equals("FS", ignoreCase = true) || d.type.trim().equals("FV", ignoreCase = true)
+private fun isInvoice(d: AsajDoc): Boolean {
+    val t = d.type.replace("(S)", "", ignoreCase = true).trim()
+    if (t.equals("FS", true) || t.equals("FV", true)) return true
+    // typ bywa inny niż prefiks numeru, np. numer "(S)FS-8017/2026/AA"
+    return Regex("^(\\(S\\))?\\s*F[SV]-", RegexOption.IGNORE_CASE).containsMatchIn(d.number.trim())
+}
 
 /** FV, która liczy się jako punkt odniesienia dla sumy WZ (brutto co najmniej MIN_FV_GROSS). */
 private fun isCountedFv(d: AsajDoc): Boolean =
     isInvoice(d) && parseAmount(d.gross) >= MIN_FV_GROSS
 
 private fun sumSinceLastFv(docs: List<AsajDoc>): WzSum? {
-    val fv = docs.filter { isCountedFv(it) }.maxByOrNull { it.date } ?: return null
-    val wz = docs.filter { it.type.equals("WZ", ignoreCase = true) && it.date >= fv.date }
+    // Lista jest chronologiczna (najnowsze na górze), więc liczy się kolejność na liście, nie sama data.
+    val idx = docs.indexOfFirst { isCountedFv(it) }
+    if (idx < 0) return null
+    val fv = docs[idx]
+    val wz = docs.subList(0, idx).filter { it.type.equals("WZ", ignoreCase = true) }
     return WzSum(fv.number, fv.date, wz.size, wz.sumOf { parseAmount(it.gross) }, wz.sumOf { parseAmount(it.net) })
 }
 
@@ -595,15 +602,15 @@ private fun AsajBody(
                     val sum = remember(docs) { sumSinceLastFv(docs) }
                     if (sum != null) {
                         Text(
-                            "WZ od ostatniej FS: " + fmtAmount(sum.gross) + " brutto",
+                            "WZ do zapłaty: " + fmtAmount(sum.gross) + " brutto",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(top = 6.dp)
                         )
                         SubText(
-                            fmtAmount(sum.net) + " netto · " + sum.count + " WZ od " + sum.fvDate +
-                                " (FS " + sum.fvNumber + ", z WZ z tego dnia)"
+                            fmtAmount(sum.net) + " netto · " + sum.count + " WZ nad ostatnią FS " + sum.fvNumber +
+                                " z " + sum.fvDate
                         )
                     } else if (docs.isNotEmpty()) {
                         SubText("Brak FS od ${fmtAmount(MIN_FV_GROSS)} na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
