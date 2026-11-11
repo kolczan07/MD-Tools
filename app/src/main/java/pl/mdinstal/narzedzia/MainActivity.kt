@@ -151,6 +151,8 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 Screen.Settings -> SettingsScreen(themeMode, onTheme, onBack = { back() }, onOpen = { go(it) })
                 Screen.IgluSettings -> IgluSettingsScreen(onBack = { back() })
                 Screen.Asaj -> AsajScreen(onBack = { back() }, onOpenSettings = { go(Screen.AsajSettings) })
+                Screen.UserSettings -> UserSettingsScreen(onBack = { back() }, onOpen = { go(it) })
+                Screen.GoogleSettings -> GoogleSettingsScreen(onBack = { back() })
                 Screen.AsajSettings -> AsajSettingsScreen(onBack = { back() })
                 Screen.About -> AboutScreen(onBack = { back() })
                 Screen.Schematic -> SchematicScreen(onBack = { back() })

@@ -105,4 +105,25 @@ object Prefs {
     fun clearAsajCreds(c: Context) {
         secure(c)?.edit()?.remove("asaj_user")?.remove("asaj_pass")?.apply()
     }
+
+    // ---- Konto Google do kopii zapasowej na Drive ----
+    /** Połączone konto Google (e-mail). Puste = kopia na Drive wyłączona. */
+    fun googleAccount(c: Context): String = sp(c).getString("google_account", "") ?: ""
+
+    fun driveLinked(c: Context): Boolean = googleAccount(c).isNotEmpty()
+
+    fun setGoogleAccount(c: Context, email: String) { sp(c).edit().putString("google_account", email).apply() }
+
+    fun clearGoogleAccount(c: Context) { sp(c).edit().remove("google_account").apply() }
+
+    /** Domyślne konto Google: login do Asaj, jeśli jest adresem e-mail (jedno konto firmowe). */
+    fun googleHint(c: Context): String {
+        val saved = googleAccount(c)
+        if (saved.isNotEmpty()) return saved
+        val u = asajUser(c).trim()
+        return if (u.contains("@")) u else ""
+    }
+
+    fun lastSync(c: Context): Long = sp(c).getLong("drive_last_sync", 0L)
+    fun setLastSync(c: Context, t: Long) { sp(c).edit().putLong("drive_last_sync", t).apply() }
 }

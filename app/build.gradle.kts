@@ -94,4 +94,7 @@ dependencies {
     // Updater — HTTP + JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20240303")
+
+    // Kopia przypisań kontrahentów na Google Drive (autoryzacja konta Google)
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 }

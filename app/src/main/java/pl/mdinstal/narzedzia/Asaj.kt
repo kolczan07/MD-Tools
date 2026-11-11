@@ -7,6 +7,10 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
+import android.widget.Toast
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -64,7 +68,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -391,6 +398,25 @@ private fun sharePdf(ctx: Context, file: File) {
     ctx.startActivity(Intent.createChooser(i, "Udostępnij PDF").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+/** Zapis PDF w publicznych "Pobrane/MD-Tools" (Android 10+) albo w katalogu aplikacji na starszych. Zwraca opis miejsca. */
+private fun saveToDownloads(ctx: Context, name: String, bytes: ByteArray): String {
+    if (Build.VERSION.SDK_INT >= 29) {
+        val cv = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, name)
+            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+            put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/MD-Tools")
+        }
+        val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+            ?: throw IOException("Nie udało się utworzyć pliku w Pobranych.")
+        (ctx.contentResolver.openOutputStream(uri) ?: throw IOException("Nie udało się otworzyć pliku do zapisu."))
+            .use { it.write(bytes) }
+        return "Pobrane/MD-Tools/$name"
+    }
+    val dir = File(ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS), "MD-Tools").apply { mkdirs() }
+    File(dir, name).writeBytes(bytes)
+    return "${dir.absolutePath}/$name"
+}
+
 /** Ekran hurtowni Asaj: dostępny limit w nagłówku i lista WZ z podglądem PDF. Wejście po odcisku palca. */
 @Composable
 fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
@@ -426,6 +452,30 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (!ok) notifDenied = true
         permTick++
+    }
+    val haptic = LocalHapticFeedback.current
+    var assigns by remember { mutableStateOf(ContractorStore.active(ctx)) }
+    var menuDoc by remember { mutableStateOf<AsajDoc?>(null) }
+    var assignDoc by remember { mutableStateOf<AsajDoc?>(null) }
+    var pendingSaveAs by remember { mutableStateOf<ByteArray?>(null) }
+    val saveAsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val bytes = pendingSaveAs
+        pendingSaveAs = null
+        if (uri != null && bytes != null) {
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        (ctx.contentResolver.openOutputStream(uri) ?: throw IOException("Nie udało się otworzyć pliku do zapisu."))
+                            .use { it.write(bytes) }
+                    }
+                    Toast.makeText(ctx, "Zapisano plik", Toast.LENGTH_SHORT).show()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    error = "Nie udało się zapisać: " + (e.message ?: e.javaClass.simpleName)
+                }
+            }
+        }
     }
 
     fun sel(d: AsajDoc): Boolean =
@@ -535,9 +585,74 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
         }
     }
 
+    /** Pobiera bajty PDF dla akcji z menu (zapis, udostępnienie); błąd pokazuje na ekranie. */
+    suspend fun fetchBytes(d: AsajDoc): ByteArray? {
+        val c = Prefs.asajCreds(ctx) ?: return null
+        if (d.pdfUrl.isBlank()) { error = "Ten dokument nie ma pliku PDF."; return null }
+        opening = d.number
+        error = null
+        return try {
+            session.pdf(d.pdfUrl, c.first, c.second)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            error = e.message ?: "Nie udało się pobrać PDF."
+            null
+        } finally {
+            opening = null
+        }
+    }
+
+    fun saveToPhone(d: AsajDoc) {
+        scope.launch {
+            val b = fetchBytes(d) ?: return@launch
+            try {
+                val where = withContext(Dispatchers.IO) { saveToDownloads(ctx, d.fileName, b) }
+                Toast.makeText(ctx, "Zapisano: $where", Toast.LENGTH_LONG).show()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "Nie udało się zapisać: " + (e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    fun saveAs(d: AsajDoc) {
+        scope.launch {
+            val b = fetchBytes(d) ?: return@launch
+            pendingSaveAs = b
+            saveAsLauncher.launch(d.fileName)
+        }
+    }
+
+    fun shareDoc(d: AsajDoc) {
+        scope.launch {
+            val b = fetchBytes(d) ?: return@launch
+            try {
+                val f = File(asajDir(ctx), d.fileName)
+                withContext(Dispatchers.IO) { f.writeBytes(b) }
+                sharePdf(ctx, f)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "Nie udało się udostępnić: " + (e.message ?: e.javaClass.simpleName)
+            }
+        }
+    }
+
+    fun setContractor(d: AsajDoc, name: String) {
+        ContractorStore.set(ctx, d.number, d.date, name)
+        assigns = ContractorStore.active(ctx)
+        DriveBackup.syncInBackground(ctx)
+    }
+
     LaunchedEffect(Unit) {
         clearAsajCache(ctx)
         unlock()
+    }
+    // Kopia z Drive: po odblokowaniu dociągamy przypisania z drugiego telefonu (jeśli konto Google połączone).
+    LaunchedEffect(unlocked) {
+        if (unlocked && DriveBackup.syncQuiet(ctx)) assigns = ContractorStore.active(ctx)
     }
     LaunchedEffect(unlocked) {
         if (unlocked && hasCreds) reload()
@@ -616,7 +731,12 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                             },
                             onRefresh = { reload() },
                             onMore = { loadMore() },
-                            onOpen = { openPdf(it) }
+                            onOpen = { openPdf(it) },
+                            assigns = assigns,
+                            onMenu = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                menuDoc = it
+                            }
                         )
                     }
                 }
@@ -631,7 +751,88 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 confirmButton = { TextButton(onClick = { warnDismissed = true }) { Text("OK") } }
             )
         }
+
+        menuDoc?.let { d ->
+            val assigned = assigns[d.number]
+            AlertDialog(
+                onDismissRequest = { menuDoc = null },
+                title = { Text(d.number) },
+                text = {
+                    Column {
+                        if (assigned != null) SubText("Kontrahent: $assigned")
+                        MenuRow("Otwórz") { menuDoc = null; openPdf(d) }
+                        MenuRow("Zapisz w telefonie") { menuDoc = null; saveToPhone(d) }
+                        MenuRow("Zapisz jako…") { menuDoc = null; saveAs(d) }
+                        MenuRow(if (assigned != null) "Zmień kontrahenta" else "Przypisz kontrahenta") {
+                            menuDoc = null
+                            assignDoc = d
+                        }
+                        if (assigned != null) MenuRow("Usuń kontrahenta") { menuDoc = null; setContractor(d, "") }
+                        MenuRow("Udostępnij") { menuDoc = null; shareDoc(d) }
+                    }
+                },
+                confirmButton = {},
+                dismissButton = { TextButton(onClick = { menuDoc = null }) { Text("Zamknij") } }
+            )
+        }
+
+        assignDoc?.let { d ->
+            ContractorDialog(
+                doc = d,
+                current = assigns[d.number].orEmpty(),
+                suggestions = remember(assigns) { ContractorStore.names(ctx) },
+                onSave = { name ->
+                    setContractor(d, name)
+                    assignDoc = null
+                },
+                onDismiss = { assignDoc = null }
+            )
+        }
     }
+}
+
+@Composable
+private fun MenuRow(text: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Text(text, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Start)
+    }
+}
+
+/** Okno przypisania kontrahenta: pole tekstowe z podpowiedziami wcześniej użytych nazw. */
+@Composable
+private fun ContractorDialog(
+    doc: AsajDoc,
+    current: String,
+    suggestions: List<String>,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf(current) }
+    val q = name.trim()
+    val shown = suggestions.filter { !it.equals(q, ignoreCase = true) && (q.isEmpty() || it.contains(q, ignoreCase = true)) }.take(8)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Kontrahent dla " + doc.number) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nazwa kontrahenta") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (shown.isNotEmpty()) {
+                    SubText("Użyte wcześniej:")
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        shown.forEach { n -> OutlinedButton(onClick = { name = n }) { Text(n) } }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(enabled = q.isNotEmpty(), onClick = { onSave(q) }) { Text("Zapisz") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Anuluj") } }
+    )
 }
 
 @Composable
@@ -652,12 +853,15 @@ private fun AsajBody(
     onShowFv: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onMore: () -> Unit,
-    onOpen: (AsajDoc) -> Unit
+    onOpen: (AsajDoc) -> Unit,
+    assigns: Map<String, String>,
+    onMenu: (AsajDoc) -> Unit
 ) {
     val q = query.trim()
     val shown = docs.filter {
         ((showWz && it.type.equals("WZ", ignoreCase = true)) || (showFv && isInvoice(it))) &&
-            (q.isEmpty() || it.number.contains(q, ignoreCase = true))
+            (q.isEmpty() || it.number.contains(q, ignoreCase = true) ||
+                (assigns[it.number]?.contains(q, ignoreCase = true) ?: false))
     }
 
     LazyColumn(Modifier.fillMaxSize()) {
@@ -724,17 +928,27 @@ private fun AsajBody(
             OutlinedTextField(
                 value = query,
                 onValueChange = onQuery,
-                label = { Text("Szukaj numeru dokumentu") },
+                label = { Text("Szukaj numeru lub kontrahenta") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
             )
+            SubText("Przytrzymaj dokument: zapis, kontrahent, udostępnianie.", Modifier.padding(bottom = 8.dp))
         }
         items(shown, key = { it.pdfUrl + it.number }) { d ->
-            AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { onOpen(d) }) {
+            AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { onOpen(d) }, onLongClick = { onMenu(d) }) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(d.number, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
                         SubText("${d.date} · brutto ${d.gross}")
+                        val who = assigns[d.number]
+                        if (who != null) {
+                            Text(
+                                "Kontrahent: $who",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                     if (opening == d.number) {
                         CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
@@ -858,7 +1072,7 @@ fun AsajSettingsScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            SubText("Login i hasło do asaj.pl. Są szyfrowane w pamięci telefonu, a wejście na ekran Asaj chroni odcisk palca.")
+            SubText("Login i hasło do asaj.pl (konto firmowe). Są szyfrowane w pamięci telefonu, a wejście na ekran Asaj chroni odcisk palca. Jeśli login jest adresem e-mail konta Google firmy, będzie podpowiadany też przy łączeniu z Google (kopia na Drive).")
             LabeledField("Login:", user, { user = it })
             LabeledField("Hasło:", pass, { pass = it }, password = true)
             Button(

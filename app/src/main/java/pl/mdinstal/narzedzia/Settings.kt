@@ -75,8 +75,7 @@ fun SettingsScreen(
             }
 
             SectionTitle("Logowanie")
-            NavCard("Ustawienia logowania Iglutech", "Login i hasło do portalu") { onOpen(Screen.IgluSettings) }
-            NavCard("Ustawienia logowania Asaj", "Login i hasło do asaj.pl") { onOpen(Screen.AsajSettings) }
+            NavCard("Ustawienia użytkownika", "Portal IGLU, Asaj.pl, konto Google (kopia na Drive)") { onOpen(Screen.UserSettings) }
 
             SectionTitle("Aktualizacje")
             UpdateCard()
