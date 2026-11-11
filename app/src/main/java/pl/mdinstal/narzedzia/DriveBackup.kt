@@ -15,7 +15,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import okhttp3.Headers
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -128,8 +127,8 @@ object DriveBackup {
         if (id == null) {
             val meta = JSONObject().put("name", FILE_NAME).put("parents", JSONArray().put("appDataFolder")).toString()
             val body = MultipartBody.Builder().setType("multipart/related".toMediaType())
-                .addPart(Headers.headersOf("Content-Type", "application/json; charset=UTF-8"), meta.toRequestBody(jsonType))
-                .addPart(Headers.headersOf("Content-Type", "application/json; charset=UTF-8"), json.toRequestBody(jsonType))
+                .addPart(meta.toRequestBody(jsonType))
+                .addPart(json.toRequestBody(jsonType))
                 .build()
             val url = UPLOAD.toHttpUrl().newBuilder().addQueryParameter("uploadType", "multipart").build()
             call(Request.Builder().url(url).header("Authorization", "Bearer $token").post(body).build())
