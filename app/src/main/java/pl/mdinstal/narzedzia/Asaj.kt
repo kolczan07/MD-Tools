@@ -1,6 +1,12 @@
 package pl.mdinstal.narzedzia
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -63,6 +69,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.fragment.app.FragmentActivity
 import kotlinx.coroutines.CancellationException
@@ -315,6 +325,41 @@ private fun monthStats(docs: List<AsajDoc>, hasMore: Boolean): MonthStats {
         complete = !hasMore || coversMonth(docs, m))
 }
 
+private const val WZ_CHANNEL = "asaj_wz"
+
+private fun canNotify(ctx: Context): Boolean =
+    Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+/** Natywne powiadomienie o WZ do zapłaty (jedno, stałe id: kolejne tylko aktualizuje kwotę). */
+private fun postWzNotification(ctx: Context, gross: Double) {
+    val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+    if (Build.VERSION.SDK_INT >= 26) {
+        nm.createNotificationChannel(
+            NotificationChannel(WZ_CHANNEL, "Asaj: WZ do zapłaty", NotificationManager.IMPORTANCE_HIGH)
+        )
+    }
+    val open = PendingIntent.getActivity(
+        ctx, 0,
+        Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+    val text = "Masz " + fmtAmount(gross) + " do zapłaty. Skontaktuj się w celu spięcia WZ."
+    val n = NotificationCompat.Builder(ctx, WZ_CHANNEL)
+        .setSmallIcon(R.drawable.ic_notify_wz)
+        .setContentTitle("Asaj: WZ do zapłaty")
+        .setContentText(text)
+        .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .setPriority(NotificationCompat.PRIORITY_HIGH)
+        .build()
+    try {
+        nm.notify(7001, n)
+    } catch (e: SecurityException) {
+    }
+}
+
 private fun asajDir(ctx: Context): File = File(ctx.cacheDir, "pdf/asaj").apply { mkdirs() }
 
 private fun clearAsajCache(ctx: Context) {
@@ -373,7 +418,15 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     var viewing by remember { mutableStateOf<Pair<AsajDoc, File>?>(null) }
     var opening by remember { mutableStateOf<String?>(null) }
     var warnDismissed by remember { mutableStateOf(false) }
+    var notified by remember { mutableStateOf(false) }
+    var notifDenied by remember { mutableStateOf(false) }
+    var permTick by remember { mutableStateOf(0) }
     val unpaid = remember(docs) { sumSinceLastFv(docs) }
+    val overWarn = unpaid != null && unpaid.gross >= WZ_WARN_GROSS
+    val notifLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (!ok) notifDenied = true
+        permTick++
+    }
 
     fun sel(d: AsajDoc): Boolean =
         (showWz && d.type.equals("WZ", ignoreCase = true)) || (showFv && isInvoice(d))
@@ -493,6 +546,18 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     LaunchedEffect(showWz, showFv) {
         if (unlocked && docs.isNotEmpty() && hasMore && !busy && docs.count { sel(it) } < 10) loadMore()
     }
+    // Monit o spięciu WZ: powiadomienie systemowe (przy braku zgody na powiadomienia zostaje okno w apce).
+    LaunchedEffect(unlocked, busy, overWarn, unpaid?.gross, permTick) {
+        if (!unlocked || busy || !overWarn || unpaid == null) return@LaunchedEffect
+        if (canNotify(ctx)) {
+            if (!notified) {
+                postWzNotification(ctx, unpaid.gross)
+                notified = true
+            }
+        } else if (!notifDenied) {
+            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     DisposableEffect(Unit) {
         onDispose {
             web.stopLoading()
@@ -558,7 +623,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
             }
         }
 
-        if (unlocked && !busy && !warnDismissed && viewing == null && unpaid != null && unpaid.gross >= WZ_WARN_GROSS) {
+        if (unlocked && !busy && !warnDismissed && viewing == null && unpaid != null && overWarn && permTick >= 0 && !canNotify(ctx)) {
             AlertDialog(
                 onDismissRequest = { warnDismissed = true },
                 title = { Text("Asaj: WZ do zapłaty") },
