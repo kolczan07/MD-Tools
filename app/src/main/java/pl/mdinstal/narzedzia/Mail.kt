@@ -115,7 +115,11 @@ data class MailMessage(
     val text: String?,
     val attachments: List<MailAttachment>,
     val unread: Boolean,
-    val snippet: String
+    val snippet: String,
+    val cc: String = "",
+    val replyTo: String = "",
+    val msgIdHeader: String = "",
+    val refs: String = ""
 )
 
 data class MailThread(val id: String, val subject: String, val messages: List<MailMessage>)
@@ -133,7 +137,11 @@ private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitMail(): T = su
 object GmailApi {
     const val SCOPE = "https://www.googleapis.com/auth/gmail.modify"
     private const val API = "https://gmail.googleapis.com/gmail/v1/users/me"
-    private val http = OkHttpClient()
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
     private val json = "application/json".toMediaType()
 
     /** Prosi Google o token do Gmaila. Przy pierwszym razie zwraca ekran zgody (NeedsUi). */
@@ -279,7 +287,11 @@ object GmailApi {
                     text = parsed.text,
                     attachments = parsed.atts,
                     unread = "UNREAD" in labelsOf(m),
-                    snippet = unescapeHtml(m.optString("snippet"))
+                    snippet = unescapeHtml(m.optString("snippet")),
+                    cc = header(payload, "Cc"),
+                    replyTo = header(payload, "Reply-To"),
+                    msgIdHeader = header(payload, "Message-ID"),
+                    refs = header(payload, "References")
                 )
             )
         }
@@ -299,6 +311,17 @@ object GmailApi {
     fun markRead(token: String, threadId: String) =
         post(token, "threads/$threadId/modify", "{\"removeLabelIds\":[\"UNREAD\"]}")
 
+    private fun rawBody(raw: String, threadId: String?): String {
+        val o = JSONObject().put("raw", raw)
+        if (!threadId.isNullOrEmpty()) o.put("threadId", threadId)
+        return o.toString()
+    }
+
+    fun send(token: String, raw: String, threadId: String?) = post(token, "messages/send", rawBody(raw, threadId))
+
+    fun saveDraft(token: String, raw: String, threadId: String?) =
+        post(token, "drafts", JSONObject().put("message", JSONObject(rawBody(raw, threadId))).toString())
+
     fun trash(token: String, threadId: String) = post(token, "threads/$threadId/trash", "{}")
 
     fun untrash(token: String, threadId: String) = post(token, "threads/$threadId/untrash", "{}")
@@ -306,8 +329,46 @@ object GmailApi {
 
 // ───────────────────────────── POMOCNICZE ─────────────────────────────
 
+/** Dzieli listę adresów po przecinkach, pomijając przecinki w cudzysłowie. */
+private fun splitAddrs(s: String): List<String> {
+    val out = ArrayList<String>()
+    val cur = StringBuilder()
+    var q = false
+    for (ch in s) {
+        if (ch == '"') q = !q
+        if (ch == ',' && !q) { out.add(cur.toString().trim()); cur.clear() } else cur.append(ch)
+    }
+    out.add(cur.toString().trim())
+    return out.filter { it.isNotEmpty() }
+}
+
+private fun replyInit(t: MailThread, myEmail: String, all: Boolean): ComposeInit {
+    val own = { m: MailMessage -> myEmail.isNotEmpty() && m.from.contains(myEmail, ignoreCase = true) }
+    val last = t.messages.lastOrNull { !own(it) } ?: t.messages.last()
+    val ref = t.messages.last()
+    val to = if (own(last)) last.to else last.replyTo.ifBlank { last.from }
+    val toMail = senderEmail(to)
+    val cc = if (all) {
+        splitAddrs(last.to + "," + last.cc)
+            .filter { !(myEmail.isNotEmpty() && it.contains(myEmail, ignoreCase = true)) && senderEmail(it) != toMail }
+            .joinToString(", ")
+    } else ""
+    val subj = if (t.subject.startsWith("re:", ignoreCase = true)) t.subject else "Re: ${t.subject}"
+    val src = (last.text ?: last.snippet).replace("\r", "").lines().take(80).joinToString("\n") { "> $it" }
+    val body = "\n\n${mailTimeFull(last.time)}, ${senderName(last.from)} napisał(a):\n$src"
+    return ComposeInit(
+        to = to, cc = cc, subject = subj, body = body, threadId = t.id,
+        inReplyTo = ref.msgIdHeader,
+        references = (ref.refs + " " + ref.msgIdHeader).trim()
+    )
+}
+
 private fun unescapeHtml(s: String): String =
     s.replace("&#39;", "'").replace("&quot;", "\"").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+
+/** Sam adres e-mail z nagłówka From, małymi literami. */
+private fun senderEmail(h: String): String =
+    (if (h.contains("<")) h.substringAfter("<").substringBefore(">") else h).trim().lowercase()
 
 /** „Imię Nazwisko <adres>” → „Imię Nazwisko” (albo sam adres). */
 private fun senderName(h: String): String {
@@ -378,6 +439,9 @@ fun MailScreen(onBack: () -> Unit) {
     var thread by remember { mutableStateOf<MailThread?>(null) }
     var openingId by remember { mutableStateOf<String?>(null) }
     var needsConnect by remember { mutableStateOf(false) }
+    val trusted = remember { mutableStateListOf<String>().apply { addAll(Prefs.trustedSenders(ctx)) } }
+    var showTrusted by remember { mutableStateOf(false) }
+    var compose by remember { mutableStateOf<ComposeInit?>(null) }
 
     /** Wywołanie API z jednym ponowieniem po odświeżeniu wygasłego tokenu. */
     suspend fun <T> api(block: suspend (String) -> T): T = withContext(Dispatchers.IO) {
@@ -495,6 +559,27 @@ fun MailScreen(onBack: () -> Unit) {
         }
     }
 
+    if (showTrusted) {
+        TrustedDialog(trusted, onChange = { Prefs.setTrustedSenders(ctx, trusted.toList()) }, onClose = { showTrusted = false })
+    }
+
+    val comp = compose
+    if (comp != null) {
+        MailComposeScreen(
+            init = comp,
+            onSend = { d -> api { t -> GmailApi.send(t, buildRaw(ctx, d), d.threadId) } },
+            onSaveDraft = { d -> api { t -> GmailApi.saveDraft(t, buildRaw(ctx, d), d.threadId) } },
+            onClose = { sent ->
+                compose = null
+                if (sent) {
+                    thread?.let { openThread(it.id) }
+                    if (folder == "SENT") load(false)
+                } else if (folder == "DRAFT") load(false)
+            }
+        )
+        return
+    }
+
     val cur = thread
     if (cur != null) {
         BackHandler { thread = null }
@@ -502,6 +587,14 @@ fun MailScreen(onBack: () -> Unit) {
             thread = cur,
             folder = folder,
             myEmail = Prefs.mailAccount(ctx),
+            trusted = trusted,
+            onReply = { all -> compose = replyInit(cur, Prefs.mailAccount(ctx), all) },
+            onTrust = { addr ->
+                if (addr.isNotEmpty() && addr !in trusted) {
+                    trusted.add(addr)
+                    Prefs.setTrustedSenders(ctx, trusted.toList())
+                }
+            },
             fetchAttachment = { a -> api { tk -> GmailApi.attachment(tk, a.messageId, a.attachmentId) } },
             onTrash = {
                 scope.launch {
@@ -538,6 +631,8 @@ fun MailScreen(onBack: () -> Unit) {
         "Poczta",
         onBack,
         actions = {
+            TextButton(enabled = token != null, onClick = { compose = ComposeInit() }) { Text("Napisz") }
+            TextButton(onClick = { showTrusted = true }) { Text("Zaufani") }
             IconButton(enabled = token != null && !busy, onClick = { load(false) }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Odśwież")
             }
@@ -598,6 +693,29 @@ fun MailScreen(onBack: () -> Unit) {
 }
 
 @Composable
+private fun TrustedDialog(trusted: MutableList<String>, onChange: () -> Unit, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Zaufani nadawcy") },
+        text = {
+            if (trusted.isEmpty()) {
+                Text("Lista jest pusta. Nadawcę dodasz przyciskiem „Ufaj nadawcy” pod treścią wiadomości. Obrazy od zaufanych ładują się od razu.")
+            } else {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    trusted.toList().forEach { a ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(a, modifier = Modifier.weight(1f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            TextButton(onClick = { trusted.remove(a); onChange() }) { Text("Usuń") }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Zamknij") } }
+    )
+}
+
+@Composable
 private fun MailRowCard(r: MailRow, loading: Boolean, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = onClick) {
@@ -642,6 +760,9 @@ private fun MailThreadView(
     thread: MailThread,
     folder: String,
     myEmail: String,
+    trusted: List<String>,
+    onReply: (Boolean) -> Unit,
+    onTrust: (String) -> Unit,
     fetchAttachment: suspend (MailAttachment) -> ByteArray,
     onTrash: () -> Unit,
     onRestore: () -> Unit,
@@ -714,7 +835,7 @@ private fun MailThreadView(
                     }
                     if (open) {
                         Spacer(Modifier.size(10.dp))
-                        val showImages = images[m.id] == true
+                        val showImages = images[m.id] == true || senderEmail(m.from) in trusted
                         val html = m.html
                         val body = when {
                             html != null -> html
@@ -723,7 +844,10 @@ private fun MailThreadView(
                         }
                         MailBody(wrapHtml(body), showImages)
                         if (html != null && !showImages && html.contains("<img", ignoreCase = true)) {
-                            TextButton(onClick = { images[m.id] = true }) { Text("Pokaż obrazy") }
+                            Row {
+                                TextButton(onClick = { images[m.id] = true }) { Text("Pokaż obrazy") }
+                                if (!own) TextButton(onClick = { onTrust(senderEmail(m.from)) }) { Text("Ufaj nadawcy") }
+                            }
                         }
                         m.attachments.forEach { a ->
                             val key = a.messageId + a.attachmentId
@@ -760,6 +884,12 @@ private fun MailThreadView(
                 }
             }
             if (info.isNotEmpty()) Text(info, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+            if (folder != "TRASH" && folder != "DRAFT") {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onReply(false) }, modifier = Modifier.weight(1f)) { Text("Odpowiedz") }
+                    OutlinedButton(onClick = { onReply(true) }, modifier = Modifier.weight(1f)) { Text("Wszystkim") }
+                }
+            }
         }
     }
 

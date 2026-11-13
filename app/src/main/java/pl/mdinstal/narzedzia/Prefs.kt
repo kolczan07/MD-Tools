@@ -145,6 +145,14 @@ object Prefs {
 
     fun setMailAccount(c: Context, email: String) { sp(c).edit().putString("mail_account", email).apply() }
 
+    /** Nadawcy (adresy e-mail, małe litery), od których poczta od razu ładuje obrazy. */
+    fun trustedSenders(c: Context): List<String> =
+        (sp(c).getString("mail_trusted", "") ?: "").split("\n").filter { it.isNotBlank() }
+
+    fun setTrustedSenders(c: Context, list: List<String>) {
+        sp(c).edit().putString("mail_trusted", list.distinct().joinToString("\n")).apply()
+    }
+
     fun clearGoogleAccount(c: Context) { sp(c).edit().remove("google_account").apply() }
 
     /** Domyślne konto Google: login do Asaj, jeśli jest adresem e-mail (jedno konto firmowe). */
