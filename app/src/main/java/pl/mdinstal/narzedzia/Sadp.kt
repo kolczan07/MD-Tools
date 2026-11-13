@@ -170,12 +170,12 @@ private suspend fun sadpScan(ctx: Context, onFound: (SadpDevice) -> Unit) = with
 
 private sealed class Probe {
     object Ok : Probe()
-    object AuthFail : Probe()
+    class AuthFail(val info: String) : Probe()
     class Err(val msg: String) : Probe()
 }
 
-private fun md5(s: String): String =
-    MessageDigest.getInstance("MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+private fun hashHex(alg: String, s: String): String =
+    MessageDigest.getInstance(if (alg.contains("256")) "SHA-256" else "MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
 private fun challengeParams(h: String): Map<String, String> =
     Regex("""(\w+)=(?:"([^"]*)"|([^,\s]+))""").findAll(h).associate { it.groupValues[1].lowercase() to (it.groupValues[2].ifEmpty { it.groupValues[3] }) }
@@ -206,22 +206,29 @@ private fun rtspProbe(ip: String, path: String, user: String, pass: String): Pro
         val (c1, h1) = rtspAsk(ip, uri, null)
         if (c1 == 200) return Probe.Ok
         if (c1 != 401) return Probe.Err("kamera odpowiedziała kodem RTSP $c1")
-        val lines = h1.lines().filter { it.startsWith("WWW-Authenticate", ignoreCase = true) }
-        val chal = (lines.firstOrNull { it.contains("Digest", ignoreCase = true) } ?: lines.firstOrNull())
-            ?.substringAfter(":")?.trim() ?: return Probe.Err("brak wyzwania logowania w odpowiedzi kamery")
+        val lines = h1.lines().filter { it.startsWith("WWW-Authenticate", ignoreCase = true) }.map { it.substringAfter(":").trim() }
+        // Nowsze firmware podaje kilka wyzwań Digest naraz (np. MD5 i SHA-256) — wybieramy MD5, a SHA-256 tylko gdy nie ma innego.
+        val digests = lines.filter { it.startsWith("Digest", ignoreCase = true) }
+        val chal = digests.firstOrNull { challengeParams(it)["algorithm"].let { a -> a == null || a.equals("MD5", true) } }
+            ?: digests.firstOrNull() ?: lines.firstOrNull() ?: return Probe.Err("brak wyzwania logowania w odpowiedzi kamery")
+        var scheme = "Basic"
+        var alg = ""
         val auth = if (chal.startsWith("Basic", ignoreCase = true)) {
             "Basic " + Base64.encodeToString("$user:$pass".toByteArray(), Base64.NO_WRAP)
         } else {
             val p = challengeParams(chal)
+            scheme = "Digest"
+            alg = p["algorithm"] ?: "MD5"
             val realm = p["realm"] ?: ""
             val nonce = p["nonce"] ?: ""
             val qop = p["qop"]?.split(",")?.map { it.trim() }?.firstOrNull { it == "auth" }
             val cnonce = UUID.randomUUID().toString().replace("-", "").take(16)
-            val ha1 = md5("$user:$realm:$pass")
-            val ha2 = md5("DESCRIBE:$uri")
-            val resp = if (qop != null) md5("$ha1:$nonce:00000001:$cnonce:$qop:$ha2") else md5("$ha1:$nonce:$ha2")
+            val ha1 = hashHex(alg, "$user:$realm:$pass")
+            val ha2 = hashHex(alg, "DESCRIBE:$uri")
+            val resp = if (qop != null) hashHex(alg, "$ha1:$nonce:00000001:$cnonce:$qop:$ha2") else hashHex(alg, "$ha1:$nonce:$ha2")
             buildString {
                 append("Digest username=\"$user\", realm=\"$realm\", nonce=\"$nonce\", uri=\"$uri\", response=\"$resp\"")
+                if (p["algorithm"] != null) append(", algorithm=$alg")
                 if (qop != null) append(", qop=$qop, nc=00000001, cnonce=\"$cnonce\"")
                 p["opaque"]?.let { append(", opaque=\"$it\"") }
             }
@@ -229,7 +236,7 @@ private fun rtspProbe(ip: String, path: String, user: String, pass: String): Pro
         val (c2, _) = rtspAsk(ip, uri, auth)
         when (c2) {
             200 -> Probe.Ok
-            401, 403 -> Probe.AuthFail
+            401, 403 -> Probe.AuthFail("$scheme${if (alg.isNotEmpty()) ", $alg" else ""}, kod $c2")
             else -> Probe.Err("kamera odpowiedziała kodem RTSP $c2")
         }
     } catch (e: Exception) {
@@ -353,7 +360,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         mutableStateOf(
             when {
                 !d.activated -> "Kamera nie jest aktywowana — aktywuj ją najpierw w SADP na komputerze."
-                bad && saved != null -> "UWAGA: kamera odrzuciła zapisane dane logowania. Nie próbuję ponownie — wpisz poprawne dane."
+                bad && saved != null -> "UWAGA: zapisane dane logowania zostały wcześniej oznaczone jako odrzucone, więc nie łączę się automatycznie. Jeśli są poprawne, użyj „Spróbuj z zapisanymi danymi”."
                 else -> ""
             }
         )
@@ -395,7 +402,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                 // Jedna nieudana próba i koniec — bez ponawiania, żeby kamera nie zablokowała konta.
                 Prefs.setCamBad(ctx, true)
                 creds = null
-                status = "UWAGA: kamera odrzuciła login lub hasło. Nie próbuję ponownie, żeby jej nie zablokować — wpisz poprawne dane."
+                status = "UWAGA: kamera odrzuciła login lub hasło (${pr.info}). Nie próbuję ponownie, żeby jej nie zablokować — wpisz poprawne dane."
                 return@LaunchedEffect
             }
             is Probe.Err -> {
@@ -501,6 +508,10 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (d.activated) OutlinedButton(onClick = { pass = ""; asking = true }) { Text("Dane logowania") }
                 if (creds != null) OutlinedButton(onClick = { attempt++ }) { Text("Połącz ponownie") }
+                if (creds == null && saved != null && d.activated) {
+                    // Jedna próba na wyraźne polecenie użytkownika; przy niepowodzeniu znacznik wraca.
+                    OutlinedButton(onClick = { Prefs.setCamBad(ctx, false); status = ""; creds = saved }) { Text("Spróbuj z zapisanymi danymi") }
+                }
             }
         }
     }
