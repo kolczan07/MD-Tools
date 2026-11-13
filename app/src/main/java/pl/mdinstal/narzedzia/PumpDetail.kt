@@ -11,12 +11,17 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,6 +29,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
@@ -49,10 +55,12 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -667,24 +675,33 @@ private fun DetailBody(
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
-            Card(
+            AppCard(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 12.dp, bottom = 8.dp)
             ) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(d.title, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                    Text("${pump.serial} · ${pump.model}", fontSize = 14.sp)
-                    Text("Status: ${if (pump.status.isBlank()) "—" else pump.status}", fontSize = 14.sp)
-                    Text(
-                        "Alarmy: ${if (d.alarm) "TAK" else "nie"} · Ostrzeżenia: ${if (d.warning) "TAK" else "nie"}",
-                        fontSize = 14.sp
-                    )
-                    Text(
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(if (pump.online) OnlineGreen else MaterialTheme.colorScheme.outline)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(d.title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
+                            SubText("${pump.serial} · ${pump.model}")
+                        }
+                        StatusPill(pump.status, pump.online)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        InfoChip("Alarmy: ${if (d.alarm) "TAK" else "nie"}", bad = d.alarm)
+                        InfoChip("Ostrzeżenia: ${if (d.warning) "TAK" else "nie"}", bad = d.warning)
+                    }
+                    SubText(
                         "Oprogramowanie: ${d.sw.ifBlank { "—" }} · SBC: ${d.sbc.ifBlank { "—" }}" +
-                            if (d.connection.isNotBlank()) " · ${d.connection}" else "",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                            if (d.connection.isNotBlank()) " · ${d.connection}" else ""
                     )
                     if (error != null) {
                         Text("Błąd odświeżania: $error", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
@@ -692,34 +709,59 @@ private fun DetailBody(
                     if (saveMsg != null) {
                         Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
                     }
-                    Text(
+                    SubText(
                         "Na żywo: ${liveStatus.ifBlank { "—" }}" +
                             if (liveMode) " · ramek: ${frames.size}" +
-                                (frames.lastOrNull()?.let { " · ostatnia: ${clockText(it.t)}" } ?: "") else "",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                (frames.lastOrNull()?.let { " · ostatnia: ${clockText(it.t)}" } ?: "") else ""
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = liveMode, onCheckedChange = { onToggleLive() })
-                        Text(
-                            if (liveMode) "  Tryb Live włączony (edycja zablokowana)" else "  Tryb Live wyłączony",
-                            fontSize = 14.sp
-                        )
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = liveMode, onCheckedChange = { onToggleLive() })
+                            Text("  Live", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                        }
+                        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = editMode, enabled = !liveMode, onCheckedChange = { onToggleEdit() })
+                            Text("  Edycja", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                        }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(checked = editMode, enabled = !liveMode, onCheckedChange = { onToggleEdit() })
-                        Text(
-                            if (editMode) "  Edycja włączona (dotknij pola z ✎)" else "  Edycja parametrów wyłączona",
-                            fontSize = 14.sp
-                        )
-                    }
+                    if (liveMode) SubText("Tryb Live włączony: edycja zablokowana.")
+                    else if (editMode) SubText("Edycja włączona: dotknij pola z ✎.")
                     Row(
-                        Modifier.padding(top = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Button(enabled = !loading, onClick = onRefresh) { Text(if (loading) "Odświeżanie…" else "Odśwież") }
                         TextButton(onClick = onOpenPortal) { Text("Otwórz w portalu") }
+                    }
+                }
+            }
+        }
+        // Dwa najważniejsze odczyty na wierzchu: temperatura wewnątrz (IndoorT) i temperatura CWU (BoilerT).
+        item {
+            val tiles = listOf("IndoorT" to "Temperatura wewnątrz", "BoilerT" to "Temperatura CWU").mapNotNull { (k, label) ->
+                val par = d.params.firstOrNull { it.keyword == k }
+                val v = current[k]
+                when {
+                    par != null -> Triple(label, k, valueText(v, par) + if (v != null && par.units.isNotBlank()) " " + par.units else "")
+                    v != null -> Triple(label, k, v.toString())
+                    else -> null
+                }
+            }
+            if (tiles.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    tiles.forEach { (label, key, text) ->
+                        AppCard(Modifier.weight(1f)) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                SubText(label)
+                                Text(text, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+                                SubText(key)
+                            }
+                        }
                     }
                 }
             }
@@ -822,10 +864,12 @@ private fun DetailBody(
             }
             item {
                 Text(
-                    active ?: "",
+                    (active ?: "").uppercase(),
                     fontWeight = FontWeight.Bold,
-                    fontSize = 22.sp,
-                    modifier = Modifier.padding(bottom = 12.dp)
+                    fontSize = 13.sp,
+                    letterSpacing = 0.6.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
                 )
             }
         }
@@ -920,69 +964,62 @@ private fun LiveChart(p: Param, frames: List<LiveFrame>) {
     }
 }
 
-/** Jedno pole parametru jak na portalu: podpis z jednostką, pod nim wartość w ramce (tylko odczyt). */
+/** Jeden parametr jako wiersz: nazwa z jednostką po lewej, wartość po prawej (z ✎, gdy da się edytować). */
 @Composable
 private fun FieldRow(p: Param, cur: Any?, des: Any?, editable: Boolean, locked: Boolean, onEdit: () -> Unit) {
     val readOnly = p.access == "R"
-    Column(
+    val cs = MaterialTheme.colorScheme
+    AppCard(
         Modifier
             .fillMaxWidth()
-            .padding(bottom = 14.dp)
+            .padding(bottom = 8.dp)
+            .then(if (editable) Modifier.border(2.dp, cs.primary, RoundedCornerShape(16.dp)) else Modifier),
+        onClick = if (editable) onEdit else null
     ) {
-        Text(
-            p.keyword + if (p.units.isNotBlank()) " (${p.units})" else "",
-            fontSize = 14.sp
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp)
-                .border(
-                    if (editable) 2.dp else 1.dp,
-                    if (editable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                    RoundedCornerShape(8.dp)
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    p.keyword + if (p.units.isNotBlank()) " (${p.units})" else "",
+                    fontSize = 14.sp,
+                    color = cs.onSurface
                 )
-                .then(if (editable) Modifier.clickable { onEdit() } else Modifier)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+                if (readOnly) SubText("tylko odczyt")
+                if (locked) SubText("harmonogram: edycja wyłączona")
+                // Gdy zadana wartość różni się od aktualnej, pokazujemy ją pod spodem.
+                if (des != null && des.toString() != cur?.toString()) {
+                    SubText("zadane: ${valueText(des, p)}")
+                }
+            }
             Text(
                 valueText(cur, p),
-                fontSize = 16.sp,
-                color = if (readOnly) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.End,
+                color = if (readOnly) cs.onSurfaceVariant else cs.onSurface,
+                modifier = Modifier.padding(start = 12.dp).widthIn(max = 170.dp)
             )
             if (p.inputType == "Select") {
-                Text("▾", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(" ▾", fontSize = 16.sp, color = cs.onSurfaceVariant)
             }
             if (editable) {
-                Text("  ✎", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
-            }
-            if (readOnly) {
-                Text(
-                    "  tylko odczyt",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Text("  ✎", fontSize = 16.sp, color = cs.primary)
             }
         }
-        if (locked) {
-            Text(
-                "harmonogram: edycja wyłączona",
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
-        // Gdy zadana wartość różni się od aktualnej, pokazujemy ją pod spodem.
-        if (des != null && des.toString() != cur?.toString()) {
-            Text(
-                "zadane: ${valueText(des, p)}",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp)
-            )
-        }
+    }
+}
+
+/** Mała pigułka informacyjna (alarmy/ostrzeżenia): czerwona, gdy coś się dzieje. */
+@Composable
+private fun InfoChip(text: String, bad: Boolean) {
+    val cs = MaterialTheme.colorScheme
+    Surface(shape = RoundedCornerShape(50), color = if (bad) cs.error.copy(alpha = 0.15f) else cs.surfaceVariant) {
+        Text(
+            text,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = if (bad) cs.error else cs.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+        )
     }
 }
 

@@ -1,5 +1,8 @@
+@file:OptIn(ExperimentalMaterial3Api::class)
+
 package pl.mdinstal.narzedzia
 
+import androidx.compose.material3.ExperimentalMaterial3Api
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
@@ -24,11 +27,13 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -40,6 +45,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Share
@@ -47,11 +53,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +73,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -869,6 +880,9 @@ private fun ContractorDialog(
     )
 }
 
+/** Od tej sumy brutto WZ pasek na ekranie robi się pomarańczowy (czerwony od WZ_WARN_GROSS). */
+private const val WZ_AMBER_GROSS = 10_000.0
+
 @Composable
 private fun AsajBody(
     docs: List<AsajDoc>,
@@ -891,74 +905,143 @@ private fun AsajBody(
     assigns: Map<String, String>,
     onMenu: (AsajDoc) -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
     val q = query.trim()
     val shown = docs.filter {
         ((showWz && it.type.equals("WZ", ignoreCase = true)) || (showFv && isInvoice(it))) &&
             (q.isEmpty() || it.number.contains(q, ignoreCase = true) ||
                 (assigns[it.number]?.contains(q, ignoreCase = true) ?: false))
     }
+    val who = remember(query, assigns) { contractorFromQuery(query, assigns) }
+    val sum = remember(docs, assigns, who) {
+        if (who != null) sumForContractor(docs, assigns, who) else sumSinceLastFv(docs)
+    }
+    // Ostatnia liczona FS dzieli listę na "do zapłaty" (nad nią), ją samą i "rozliczone" (pod nią).
+    val refIdx = remember(docs) { docs.indexOfFirst { isCountedFv(it) } }
+    val pos = remember(docs) { docs.withIndex().associate { (i, d) -> (d.pdfUrl + d.number) to i } }
+    val groups: List<Pair<String?, List<AsajDoc>>> =
+        if (refIdx < 0) listOf(null to shown)
+        else listOf(
+            "Do zapłaty" to shown.filter { (pos[it.pdfUrl + it.number] ?: 0) < refIdx },
+            "Ostatnia FS" to shown.filter { pos[it.pdfUrl + it.number] == refIdx },
+            "Rozliczone" to shown.filter { (pos[it.pdfUrl + it.number] ?: 0) > refIdx }
+        ).filter { it.second.isNotEmpty() }
+    // Chipy kontrahentów: od największej kwoty WZ do zapłaty.
+    val chips = remember(docs, assigns) {
+        assigns.values.distinctBy { it.lowercase() }
+            .map { n -> n to sumForContractor(docs, assigns, n) }
+            .sortedByDescending { it.second?.gross ?: 0.0 }
+    }
 
     LazyColumn(Modifier.fillMaxSize()) {
         item {
-            AppCard(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp)) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Dostępny limit", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val usable = limit?.usable.orEmpty()
-                    Text(
-                        if (usable.isNotBlank()) usable else if (limitChecked) "nie udało się odczytać z „Moje dane”" else "—",
-                        fontSize = if (usable.isNotBlank()) 22.sp else 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    if (limit != null && usable.isNotBlank()) {
-                        SubText(
-                            "Nadany: ${limit.granted} · Pozostałe środki: ${limit.remaining}" +
-                                if (limit.term.isNotBlank()) " · Termin: ${limit.term}" else ""
-                        )
-                    }
-                    val who = remember(query, assigns) { contractorFromQuery(query, assigns) }
-                    val sum = remember(docs, assigns, who) {
-                        if (who != null) sumForContractor(docs, assigns, who) else sumSinceLastFv(docs)
-                    }
-                    if (sum != null) {
+            Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                AppCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            (if (who != null) "WZ do zapłaty · $who: " else "WZ do zapłaty: ") + fmtAmount(sum.gross) + " brutto",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(top = 6.dp)
+                            if (who != null) "WZ do zapłaty · $who" else "WZ do zapłaty",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = cs.onSurfaceVariant
                         )
-                        SubText(
-                            fmtAmount(sum.net) + " netto · " + sum.count + " WZ nad " +
-                                (if (sum.ownFv) "ostatnią FS kontrahenta " else "ostatnią FS ") + sum.fvNumber +
-                                " z " + sum.fvDate
-                        )
-                    } else if (docs.isNotEmpty()) {
-                        SubText("Brak FS od ${fmtAmount(MIN_FV_GROSS)} na wczytanych stronach, suma WZ niedostępna.", Modifier.padding(top = 6.dp))
+                        if (sum != null) {
+                            Text(fmtAmount(sum.gross), fontSize = 34.sp, fontWeight = FontWeight.ExtraBold, color = cs.onSurface)
+                            if (who == null) {
+                                val frac = (sum.gross / WZ_WARN_GROSS).coerceIn(0.0, 1.0).toFloat()
+                                val barColor = when {
+                                    sum.gross >= WZ_WARN_GROSS -> cs.error
+                                    sum.gross >= WZ_AMBER_GROSS -> Color(0xFFD97706)
+                                    else -> OnlineGreen
+                                }
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp)
+                                        .height(10.dp)
+                                        .clip(RoundedCornerShape(50))
+                                        .background(cs.surfaceVariant)
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .fillMaxWidth(frac)
+                                            .height(10.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(barColor)
+                                    )
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    SubText("brutto")
+                                    SubText("limit gotówki " + fmtAmount(WZ_WARN_GROSS))
+                                }
+                                val left = WZ_WARN_GROSS - sum.gross
+                                Text(
+                                    if (left >= 0) "Zostało " + fmtAmount(left) + " do spięcia WZ"
+                                    else "Limit przekroczony o " + fmtAmount(-left) + ", spięcie WZ",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (left >= 0) cs.onSurface else cs.error,
+                                    modifier = Modifier.padding(top = 8.dp)
+                                )
+                            }
+                            SubText(
+                                fmtAmount(sum.net) + " netto · " + sum.count + " WZ nad " +
+                                    (if (sum.ownFv) "ostatnią FS kontrahenta " else "ostatnią FS ") + sum.fvNumber +
+                                    " z " + sum.fvDate
+                            )
+                        } else {
+                            Text("—", fontSize = 34.sp, fontWeight = FontWeight.ExtraBold, color = cs.onSurface)
+                            if (docs.isNotEmpty()) {
+                                SubText("Brak FS od ${fmtAmount(MIN_FV_GROSS)} na wczytanych stronach, suma WZ niedostępna.")
+                            }
+                        }
                     }
-                    if (docs.isNotEmpty()) {
-                        val ms = remember(docs, hasMore) { monthStats(docs, hasMore) }
-                        Text(
-                            "WZ w tym miesiącu (" + ms.month + "): " + fmtAmount(ms.gross) + " brutto",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                        SubText(
-                            fmtAmount(ms.net) + " netto · " + ms.count + " WZ" +
-                                if (ms.complete) "" else " (niepełne: doczytaj starsze dokumenty)"
-                        )
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AppCard(Modifier.weight(1f)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            SubText("Dostępny limit")
+                            val usable = limit?.usable.orEmpty()
+                            Text(
+                                if (usable.isNotBlank()) usable else "—",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = cs.onSurface
+                            )
+                            if (limit != null && usable.isNotBlank()) {
+                                SubText(
+                                    "Nadany: ${limit.granted} · Pozostałe: ${limit.remaining}" +
+                                        if (limit.term.isNotBlank()) " · Termin: ${limit.term}" else ""
+                                )
+                            } else if (limitChecked) {
+                                SubText("nie udało się odczytać z „Moje dane”")
+                            }
+                        }
                     }
-                    if (status.isNotEmpty()) SubText(status)
-                    if (error != null) Text(error, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
-                    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(enabled = !busy, onClick = onRefresh) { Text(if (busy) "Chwila…" else "Odśwież") }
-                        Checkbox(checked = showWz, onCheckedChange = onShowWz, modifier = Modifier.padding(start = 8.dp))
-                        Text("WZ", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
-                        Checkbox(checked = showFv, onCheckedChange = onShowFv)
-                        Text("FS", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface)
+                    AppCard(Modifier.weight(1f)) {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            val ms = remember(docs, hasMore) { monthStats(docs, hasMore) }
+                            SubText("WZ w miesiącu (" + ms.month + ")")
+                            Text(
+                                if (docs.isNotEmpty()) fmtAmount(ms.gross) else "—",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = cs.onSurface
+                            )
+                            if (docs.isNotEmpty()) {
+                                SubText(
+                                    "brutto · " + fmtAmount(ms.net) + " netto · " + ms.count + " WZ" +
+                                        if (ms.complete) "" else " (niepełne: doczytaj starsze)"
+                                )
+                            }
+                        }
                     }
+                }
+                if (status.isNotEmpty()) SubText(status)
+                if (error != null) Text(error, fontSize = 13.sp, color = cs.error)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(enabled = !busy, onClick = onRefresh) { Text(if (busy) "Chwila…" else "Odśwież") }
+                    FilterChip(selected = showWz, onClick = { onShowWz(!showWz) }, label = { Text("WZ") })
+                    FilterChip(selected = showFv, onClick = { onShowFv(!showFv) }, label = { Text("FS") })
                 }
             }
         }
@@ -968,32 +1051,44 @@ private fun AsajBody(
                 onValueChange = onQuery,
                 label = { Text("Szukaj numeru lub kontrahenta") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)
             )
-            SubText("Przytrzymaj dokument: zapis, kontrahent, udostępnianie.", Modifier.padding(bottom = 8.dp))
-        }
-        items(shown, key = { it.pdfUrl + it.number }) { d ->
-            AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { onOpen(d) }, onLongClick = { onMenu(d) }) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(d.number, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                        SubText("${d.date} · brutto ${d.gross}")
-                        val who = assigns[d.number]
-                        if (who != null) {
-                            Text(
-                                "Kontrahent: $who",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                    if (opening == d.number) {
-                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("PDF", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            if (chips.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(selected = q.isEmpty(), onClick = { onQuery("") }, label = { Text("Wszyscy") })
+                    chips.forEach { (name, s) ->
+                        val on = who != null && who.equals(name, ignoreCase = true)
+                        FilterChip(
+                            selected = on,
+                            onClick = { onQuery(if (on) "" else name) },
+                            label = { Text(name + if (s != null && s.count > 0) " · " + fmtAmount(s.gross) else "") }
+                        )
                     }
                 }
+            }
+            SubText("Przytrzymaj dokument: zapis, kontrahent, udostępnianie.", Modifier.padding(top = 4.dp))
+        }
+        groups.forEach { (title, list) ->
+            if (title != null) {
+                item(key = "h_$title") {
+                    SectionHeader(title, if (title == "Ostatnia FS") "" else list.count { it.type.equals("WZ", ignoreCase = true) }.toString() + " WZ")
+                }
+            }
+            items(list, key = { it.pdfUrl + it.number }) { d ->
+                DocRow(
+                    d = d,
+                    who = assigns[d.number],
+                    opening = opening == d.number,
+                    muted = title == "Rozliczone",
+                    onOpen = { onOpen(d) },
+                    onMenu = { onMenu(d) }
+                )
             }
         }
         if (shown.isEmpty() && !busy) {
@@ -1006,6 +1101,84 @@ private fun AsajBody(
                     onClick = onMore,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                 ) { Text("Starsze dokumenty") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, right: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 16.dp, bottom = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            title.uppercase(),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.6.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        SubText(right)
+    }
+}
+
+/** Jeden dokument: plakietka typu, numer, data, kontrahent, kwota brutto i PDF. */
+@Composable
+private fun DocRow(d: AsajDoc, who: String?, opening: Boolean, muted: Boolean, onOpen: () -> Unit, onMenu: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val isWz = d.type.equals("WZ", ignoreCase = true)
+    val tone = if (isWz) cs.primary else OnlineGreen
+    AppCard(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .then(if (muted) Modifier.alpha(0.72f) else Modifier),
+        onClick = onOpen,
+        onLongClick = onMenu
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(tone.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (isWz) "WZ" else if (isInvoice(d)) "FS" else d.type.take(3),
+                    color = tone,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 14.sp
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(d.number, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = cs.onSurface)
+                SubText(d.date)
+                if (who != null) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = cs.primary.copy(alpha = 0.12f),
+                        modifier = Modifier.padding(top = 6.dp)
+                    ) {
+                        Text(
+                            who,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = cs.primary,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text(fmtAmount(parseAmount(d.gross)), fontWeight = FontWeight.Bold, fontSize = 16.sp, color = cs.onSurface)
+                if (opening) {
+                    CircularProgressIndicator(Modifier.padding(top = 6.dp).size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("PDF", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = cs.primary, modifier = Modifier.padding(top = 6.dp))
+                }
             }
         }
     }
