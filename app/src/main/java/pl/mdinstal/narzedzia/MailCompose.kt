@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -34,7 +35,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,6 +58,8 @@ class ComposeInit(
     val inReplyTo: String = "",
     val references: String = ""
 )
+
+class MailContact(val email: String, val name: String, val count: Int)
 
 class OutAttachment(val uri: Uri, val name: String, val mime: String, val size: Long)
 
@@ -135,6 +140,7 @@ private fun kb(b: Long): String = if (b >= 1_048_576) String.format("%.1f MB", b
 @Composable
 fun MailComposeScreen(
     init: ComposeInit,
+    contacts: List<MailContact>,
     onSend: suspend (ComposeData) -> Unit,
     onSaveDraft: suspend (ComposeData) -> Unit,
     onClose: (sent: Boolean) -> Unit
@@ -144,7 +150,10 @@ fun MailComposeScreen(
     var to by remember { mutableStateOf(init.to) }
     var cc by remember { mutableStateOf(init.cc) }
     var subject by remember { mutableStateOf(init.subject) }
-    var body by remember { mutableStateOf(init.body) }
+    // Kursor na początku, żeby od razu pisać nad podpisem i cytatem.
+    var bodyTf by remember { mutableStateOf(TextFieldValue(init.body, TextRange(0))) }
+    val body = bodyTf.text
+    var showCc by remember { mutableStateOf(init.cc.isNotBlank()) }
     val atts = remember { mutableStateListOf<OutAttachment>() }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
@@ -224,14 +233,18 @@ fun MailComposeScreen(
             Modifier.fillMaxSize().padding(pad).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            LabeledField("Do", to, { to = it }, keyboard = KeyboardType.Email)
-            LabeledField("DW (kopia)", cc, { cc = it }, keyboard = KeyboardType.Email)
+            RecipientField("Do", to, { to = it }, contacts)
+            if (showCc) {
+                RecipientField("DW (kopia)", cc, { cc = it }, contacts)
+            } else {
+                TextButton(onClick = { showCc = true }, modifier = Modifier.align(Alignment.End)) { Text("+ DW") }
+            }
             LabeledField("Temat", subject, { subject = it })
             Column {
                 Text("Treść", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
                 OutlinedTextField(
-                    value = body,
-                    onValueChange = { body = it },
+                    value = bodyTf,
+                    onValueChange = { bodyTf = it },
                     modifier = Modifier.fillMaxWidth().heightIn(min = 280.dp).padding(top = 4.dp),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                 )
@@ -269,5 +282,37 @@ fun MailComposeScreen(
                 }
             }
         )
+    }
+}
+
+/** Pole adresata z podpowiedziami z historii poczty (wg fragmentu po ostatnim przecinku). */
+@Composable
+private fun RecipientField(label: String, value: String, onChange: (String) -> Unit, contacts: List<MailContact>) {
+    val cs = MaterialTheme.colorScheme
+    val cut = maxOf(value.lastIndexOf(','), value.lastIndexOf(';'))
+    val prefix = if (cut >= 0) value.substring(0, cut + 1) + " " else ""
+    val token = value.substring(cut + 1).trim().lowercase()
+    val used = value.split(",", ";").map { it.trim().lowercase() }.toSet()
+    val hits = if (token.length < 2) emptyList() else contacts
+        .filter { it.email !in used && (it.email.contains(token) || it.name.lowercase().contains(token)) }
+        .sortedByDescending { it.count }
+        .take(4)
+    Column {
+        LabeledField(label, value, onChange, keyboard = KeyboardType.Email)
+        hits.forEach { h ->
+            Column(
+                Modifier.fillMaxWidth().clickable { onChange(prefix + h.email + ", ") }.padding(horizontal = 4.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    h.name.ifBlank { h.email },
+                    fontSize = 14.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                    color = cs.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (h.name.isNotBlank()) Text(h.email, fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }

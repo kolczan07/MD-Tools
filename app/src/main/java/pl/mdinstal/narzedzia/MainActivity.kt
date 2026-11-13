@@ -38,6 +38,13 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : FragmentActivity() {
     private var themeMode by mutableStateOf("system")
+    private var openMail by mutableStateOf(false)
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.getBooleanExtra(EXTRA_OPEN_MAIL, false)) openMail = true
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +53,8 @@ class MainActivity : FragmentActivity() {
         }
         enableEdgeToEdge()
         themeMode = Prefs.theme(this)
+        if (intent?.getBooleanExtra(EXTRA_OPEN_MAIL, false) == true) openMail = true
+        if (Prefs.mailNotify(this)) MailNotify.schedule(this)
         setContent {
             val dark = when (themeMode) {
                 "dark" -> true
@@ -59,7 +68,7 @@ class MainActivity : FragmentActivity() {
                 )
             }
             AppTheme(dark) {
-                App(themeMode = themeMode, onTheme = { m ->
+                App(openMail = openMail, onMailOpened = { openMail = false }, themeMode = themeMode, onTheme = { m ->
                     themeMode = m
                     Prefs.setTheme(this@MainActivity, m)
                 })
@@ -69,7 +78,7 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-fun App(themeMode: String, onTheme: (String) -> Unit) {
+fun App(openMail: Boolean, onMailOpened: () -> Unit, themeMode: String, onTheme: (String) -> Unit) {
     val stack = remember { mutableStateListOf(Screen.Home) }
     var splash by remember { mutableStateOf(true) }
     val ctx = LocalContext.current
@@ -97,6 +106,13 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
     }
 
     fun go(s: Screen) { stack.add(s) }
+    // Kliknięcie w powiadomienie o poczcie otwiera ekran Poczty.
+    LaunchedEffect(openMail, splash) {
+        if (openMail && !splash) {
+            if (stack.last() != Screen.Mail) stack.add(Screen.Mail)
+            onMailOpened()
+        }
+    }
     fun back() {
         if (stack.size > 1) {
             val leaving = stack.removeAt(stack.lastIndex)
@@ -145,6 +161,7 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 Screen.Wifi -> WifiScreen(onBack = { back() })
                 Screen.Lan -> LanScreen(onBack = { back() })
                 Screen.Mail -> MailScreen(onBack = { back() })
+                Screen.MailSettings -> MailSettingsScreen(onBack = { back() })
                 Screen.Sadp -> SadpScreen(onBack = { back() })
                 Screen.Weather -> WeatherScreen(onBack = { back() })
                 Screen.Iglutech -> IglutechScreen(onBack = { back() }, openSerial = pendingSerial)

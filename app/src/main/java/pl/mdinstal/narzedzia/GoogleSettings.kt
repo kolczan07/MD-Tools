@@ -53,6 +53,10 @@ fun UserSettingsScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
                 if (Prefs.camCreds(ctx) != null) "Login i hasło zapisane" else "Domyślny login i hasło do kamer (SADP)"
             ) { onOpen(Screen.CamSettings) }
             SettingsNavCard(
+                "Poczta",
+                if (Prefs.mailNotify(ctx)) "Powiadomienia włączone, podpis i ustawienia" else "Podpis i powiadomienia o nowych wiadomościach"
+            ) { onOpen(Screen.MailSettings) }
+            SettingsNavCard(
                 "Google",
                 if (Prefs.driveLinked(ctx)) "Kopia na Drive: " + Prefs.googleAccount(ctx) else "Kopia przypisań kontrahentów na Google Drive"
             ) { onOpen(Screen.GoogleSettings) }

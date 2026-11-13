@@ -97,6 +97,9 @@ dependencies {
     // Podgląd kamer Hikvision (SADP): VLC, bo ExoPlayer psuje adres RTSP z hasłem zawierającym @
     implementation("org.videolan.android:libvlc-all:3.6.0")
 
+    // Powiadomienia o nowej poczcie (sprawdzanie w tle co ok. 15 min)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     // Updater — HTTP + JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.json:json:20240303")

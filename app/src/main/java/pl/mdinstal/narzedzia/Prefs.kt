@@ -153,6 +153,32 @@ object Prefs {
         sp(c).edit().putString("mail_trusted", list.distinct().joinToString("\n")).apply()
     }
 
+    // ── Poczta: podpis, powiadomienia, książka adresowa ──
+    fun mailSignature(c: Context): String = sp(c).getString("mail_signature", "") ?: ""
+    fun setMailSignature(c: Context, v: String) { sp(c).edit().putString("mail_signature", v).apply() }
+
+    fun mailNotify(c: Context): Boolean = sp(c).getBoolean("mail_notify", false)
+    fun setMailNotify(c: Context, v: Boolean) { sp(c).edit().putBoolean("mail_notify", v).apply() }
+
+    fun mailHistoryId(c: Context): String = sp(c).getString("mail_history_id", "") ?: ""
+    fun setMailHistoryId(c: Context, v: String) { sp(c).edit().putString("mail_history_id", v).apply() }
+
+    fun mailContacts(c: Context): List<MailContact> =
+        (sp(c).getString("mail_contacts", "") ?: "").lines().mapNotNull { l ->
+            val p = l.split("\t")
+            if (p.size >= 3 && p[0].isNotBlank()) MailContact(p[0], p[1], p[2].toIntOrNull() ?: 1) else null
+        }
+
+    fun setMailContacts(c: Context, list: List<MailContact>) {
+        val top = list.sortedByDescending { it.count }.take(600)
+        sp(c).edit()
+            .putString("mail_contacts", top.joinToString("\n") { it.email + "\t" + it.name.replace("\t", " ").replace("\n", " ") + "\t" + it.count })
+            .putLong("mail_contacts_ts", System.currentTimeMillis())
+            .apply()
+    }
+
+    fun mailContactsAge(c: Context): Long = System.currentTimeMillis() - sp(c).getLong("mail_contacts_ts", 0L)
+
     fun clearGoogleAccount(c: Context) { sp(c).edit().remove("google_account").apply() }
 
     /** Domyślne konto Google: login do Asaj, jeśli jest adresem e-mail (jedno konto firmowe). */

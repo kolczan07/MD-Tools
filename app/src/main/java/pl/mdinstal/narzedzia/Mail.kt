@@ -34,9 +34,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -123,6 +125,8 @@ data class MailMessage(
 )
 
 data class MailThread(val id: String, val subject: String, val messages: List<MailMessage>)
+
+class MailNew(val row: MailRow, val fromEmail: String)
 
 /** Token Gmail wygasł (HTTP 401) — trzeba poprosić Google o nowy. */
 class MailUnauthorized : IOException("Token Gmail wygasł")
@@ -304,6 +308,80 @@ object GmailApi {
         return Base64.decode(j.getString("data"), Base64.URL_SAFE)
     }
 
+    fun profileHistoryId(token: String): String =
+        JSONObject(exec(token, Request.Builder().url("$API/profile"))).optString("historyId")
+
+    /** Id nowych wiadomości w Odebranych od podanego punktu historii + nowy punkt odniesienia. */
+    fun newInboxMessages(token: String, startHistoryId: String): Pair<List<String>, String> {
+        val ids = ArrayList<String>()
+        var page: String? = null
+        var newest = startHistoryId
+        do {
+            val u = "$API/history".toHttpUrl().newBuilder()
+                .addQueryParameter("startHistoryId", startHistoryId)
+                .addQueryParameter("historyTypes", "messageAdded")
+                .addQueryParameter("labelId", "INBOX")
+                .addQueryParameter("maxResults", "100")
+            if (page != null) u.addQueryParameter("pageToken", page)
+            val j = JSONObject(exec(token, Request.Builder().url(u.build())))
+            val h = j.optJSONArray("history") ?: JSONArray()
+            for (i in 0 until h.length()) {
+                val added = h.getJSONObject(i).optJSONArray("messagesAdded") ?: continue
+                for (k in 0 until added.length()) {
+                    val m = added.getJSONObject(k).getJSONObject("message")
+                    val labels = labelsOf(m)
+                    if ("INBOX" in labels && "UNREAD" in labels) ids.add(m.getString("id"))
+                }
+            }
+            j.optString("historyId").takeIf { it.isNotEmpty() }?.let { newest = it }
+            page = j.optString("nextPageToken").ifEmpty { null }
+        } while (page != null)
+        return ids to newest
+    }
+
+    /** Pojedyncza wiadomość do powiadomienia (nagłówki From/Subject + fragment). */
+    fun messageRow(token: String, id: String): MailNew {
+        val u = "$API/messages/$id".toHttpUrl().newBuilder()
+            .addQueryParameter("format", "metadata")
+            .addQueryParameter("metadataHeaders", "From")
+            .addQueryParameter("metadataHeaders", "Subject")
+            .build()
+        val m = JSONObject(exec(token, Request.Builder().url(u)))
+        val p = m.optJSONObject("payload")
+        val from = header(p, "From")
+        val row = MailRow(
+            id = m.optString("threadId", id),
+            who = senderName(from),
+            subject = header(p, "Subject").ifBlank { "(bez tematu)" },
+            snippet = unescapeHtml(m.optString("snippet")),
+            time = m.optString("internalDate").toLongOrNull() ?: 0L,
+            unread = true,
+            count = 1
+        )
+        return MailNew(row, senderEmail(from))
+    }
+
+    /** Wartości podanych nagłówków z ostatnich wiadomości w folderze (do podpowiedzi adresatów). */
+    suspend fun recentHeaders(token: String, label: String, count: Int, names: List<String>): List<List<String>> = coroutineScope {
+        val u = "$API/messages".toHttpUrl().newBuilder()
+            .addQueryParameter("labelIds", label)
+            .addQueryParameter("maxResults", count.toString())
+            .build()
+        val arr = JSONObject(exec(token, Request.Builder().url(u))).optJSONArray("messages") ?: JSONArray()
+        val ids = (0 until arr.length()).map { arr.getJSONObject(it).getString("id") }
+        val sem = Semaphore(6)
+        ids.map { id ->
+            async(Dispatchers.IO) {
+                sem.withPermit {
+                    val b = "$API/messages/$id".toHttpUrl().newBuilder().addQueryParameter("format", "metadata")
+                    names.forEach { b.addQueryParameter("metadataHeaders", it) }
+                    val p = JSONObject(exec(token, Request.Builder().url(b.build()))).optJSONObject("payload")
+                    names.map { header(p, it) }
+                }
+            }
+        }.awaitAll()
+    }
+
     private fun post(token: String, path: String, body: String) {
         exec(token, Request.Builder().url("$API/$path").post(body.toRequestBody(json)))
     }
@@ -329,6 +407,25 @@ object GmailApi {
 
 // ───────────────────────────── POMOCNICZE ─────────────────────────────
 
+/** Odświeża książkę adresową z historii poczty: wysłane (ważniejsze) i odebrane. */
+suspend fun refreshMailContacts(ctx: Context, token: String) {
+    val me = Prefs.mailAccount(ctx).lowercase()
+    val names = HashMap<String, String>()
+    val counts = HashMap<String, Int>()
+    fun take(h: String, w: Int) {
+        for (a in splitAddrs(h)) {
+            val e = senderEmail(a)
+            if (!e.contains("@") || e == me || e.contains("noreply") || e.contains("no-reply") || e.contains("mailer-daemon")) continue
+            counts[e] = (counts[e] ?: 0) + w
+            val n = senderName(a)
+            if (n.isNotBlank() && !n.contains("@") && names[e].isNullOrEmpty()) names[e] = n
+        }
+    }
+    GmailApi.recentHeaders(token, "SENT", 80, listOf("To", "Cc")).forEach { (to, cc) -> take(to, 3); take(cc, 2) }
+    GmailApi.recentHeaders(token, "INBOX", 80, listOf("From")).forEach { (f) -> take(f, 1) }
+    Prefs.setMailContacts(ctx, counts.map { (e, c) -> MailContact(e, names[e].orEmpty(), c) })
+}
+
 /** Dzieli listę adresów po przecinkach, pomijając przecinki w cudzysłowie. */
 private fun splitAddrs(s: String): List<String> {
     val out = ArrayList<String>()
@@ -342,7 +439,9 @@ private fun splitAddrs(s: String): List<String> {
     return out.filter { it.isNotEmpty() }
 }
 
-private fun replyInit(t: MailThread, myEmail: String, all: Boolean): ComposeInit {
+private fun sigBlock(sig: String): String = if (sig.isBlank()) "" else "\n\n-- \n" + sig.trim()
+
+private fun replyInit(t: MailThread, myEmail: String, all: Boolean, sig: String): ComposeInit {
     val own = { m: MailMessage -> myEmail.isNotEmpty() && m.from.contains(myEmail, ignoreCase = true) }
     val last = t.messages.lastOrNull { !own(it) } ?: t.messages.last()
     val ref = t.messages.last()
@@ -355,7 +454,7 @@ private fun replyInit(t: MailThread, myEmail: String, all: Boolean): ComposeInit
     } else ""
     val subj = if (t.subject.startsWith("re:", ignoreCase = true)) t.subject else "Re: ${t.subject}"
     val src = (last.text ?: last.snippet).replace("\r", "").lines().take(80).joinToString("\n") { "> $it" }
-    val body = "\n\n${mailTimeFull(last.time)}, ${senderName(last.from)} napisał(a):\n$src"
+    val body = sigBlock(sig) + "\n\n${mailTimeFull(last.time)}, ${senderName(last.from)} napisał(a):\n$src"
     return ComposeInit(
         to = to, cc = cc, subject = subj, body = body, threadId = t.id,
         inReplyTo = ref.msgIdHeader,
@@ -440,8 +539,8 @@ fun MailScreen(onBack: () -> Unit) {
     var openingId by remember { mutableStateOf<String?>(null) }
     var needsConnect by remember { mutableStateOf(false) }
     val trusted = remember { mutableStateListOf<String>().apply { addAll(Prefs.trustedSenders(ctx)) } }
-    var showTrusted by remember { mutableStateOf(false) }
     var compose by remember { mutableStateOf<ComposeInit?>(null) }
+    var contacts by remember { mutableStateOf(Prefs.mailContacts(ctx)) }
 
     /** Wywołanie API z jednym ponowieniem po odświeżeniu wygasłego tokenu. */
     suspend fun <T> api(block: suspend (String) -> T): T = withContext(Dispatchers.IO) {
@@ -488,6 +587,17 @@ fun MailScreen(onBack: () -> Unit) {
         needsConnect = false
         if (!email.isNullOrBlank()) Prefs.setMailAccount(ctx, email)
         load(false)
+        // Książkę adresową odświeżamy w tle, najwyżej raz na dobę.
+        if (Prefs.mailContactsAge(ctx) > 24L * 3600 * 1000) {
+            scope.launch {
+                try {
+                    withContext(Dispatchers.IO) { refreshMailContacts(ctx, t) }
+                    contacts = Prefs.mailContacts(ctx)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) { }
+            }
+        }
     }
 
     var hintUsed by remember { mutableStateOf("") }
@@ -559,15 +669,23 @@ fun MailScreen(onBack: () -> Unit) {
         }
     }
 
-    if (showTrusted) {
-        TrustedDialog(trusted, onChange = { Prefs.setTrustedSenders(ctx, trusted.toList()) }, onClose = { showTrusted = false })
-    }
-
     val comp = compose
     if (comp != null) {
         MailComposeScreen(
             init = comp,
-            onSend = { d -> api { t -> GmailApi.send(t, buildRaw(ctx, d), d.threadId) } },
+            contacts = contacts,
+            onSend = { d ->
+                api { t -> GmailApi.send(t, buildRaw(ctx, d), d.threadId) }
+                // Adresaci wysłanej wiadomości trafiają od razu do podpowiedzi.
+                val add = (splitAddrs(d.to.replace(";", ",")) + splitAddrs(d.cc.replace(";", ",")))
+                    .map { senderEmail(it) }.filter { it.contains("@") }
+                if (add.isNotEmpty()) {
+                    val m = Prefs.mailContacts(ctx).associateBy { it.email }.toMutableMap()
+                    add.forEach { e -> m[e] = MailContact(e, m[e]?.name.orEmpty(), (m[e]?.count ?: 0) + 3) }
+                    Prefs.setMailContacts(ctx, m.values.toList())
+                    contacts = Prefs.mailContacts(ctx)
+                }
+            },
             onSaveDraft = { d -> api { t -> GmailApi.saveDraft(t, buildRaw(ctx, d), d.threadId) } },
             onClose = { sent ->
                 compose = null
@@ -588,7 +706,7 @@ fun MailScreen(onBack: () -> Unit) {
             folder = folder,
             myEmail = Prefs.mailAccount(ctx),
             trusted = trusted,
-            onReply = { all -> compose = replyInit(cur, Prefs.mailAccount(ctx), all) },
+            onReply = { all -> compose = replyInit(cur, Prefs.mailAccount(ctx), all, Prefs.mailSignature(ctx)) },
             onTrust = { addr ->
                 if (addr.isNotEmpty() && addr !in trusted) {
                     trusted.add(addr)
@@ -631,13 +749,12 @@ fun MailScreen(onBack: () -> Unit) {
         "Poczta",
         onBack,
         actions = {
-            TextButton(enabled = token != null, onClick = { compose = ComposeInit() }) { Text("Napisz") }
-            TextButton(onClick = { showTrusted = true }) { Text("Zaufani") }
             IconButton(enabled = token != null && !busy, onClick = { load(false) }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Odśwież")
             }
         }
     ) { pad ->
+        Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
             Row(
                 Modifier.fillMaxWidth().padding(top = 8.dp).verticalScroll(rememberScrollState(), enabled = false),
@@ -687,32 +804,24 @@ fun MailScreen(onBack: () -> Unit) {
                         ) { Text(if (busy) "Wczytywanie…" else "Wczytaj starsze") }
                     }
                 }
+                // Miejsce pod przyciskiem „Napisz”, żeby nie zasłaniał ostatniej wiadomości.
+                item { Spacer(Modifier.size(88.dp)) }
             }
         }
-    }
-}
-
-@Composable
-private fun TrustedDialog(trusted: MutableList<String>, onChange: () -> Unit, onClose: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onClose,
-        title = { Text("Zaufani nadawcy") },
-        text = {
-            if (trusted.isEmpty()) {
-                Text("Lista jest pusta. Nadawcę dodasz przyciskiem „Ufaj nadawcy” pod treścią wiadomości. Obrazy od zaufanych ładują się od razu.")
-            } else {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    trusted.toList().forEach { a ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(a, modifier = Modifier.weight(1f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            TextButton(onClick = { trusted.remove(a); onChange() }) { Text("Usuń") }
-                        }
-                    }
-                }
+        if (token != null) {
+            ExtendedFloatingActionButton(
+                onClick = { compose = ComposeInit(body = sigBlock(Prefs.mailSignature(ctx))) },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(pad).padding(16.dp)
+            ) {
+                Icon(Icons.Filled.Edit, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Napisz", fontWeight = FontWeight.Bold)
             }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text("Zamknij") } }
-    )
+        }
+        }
+    }
 }
 
 @Composable
