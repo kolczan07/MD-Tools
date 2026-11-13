@@ -1,10 +1,14 @@
 package pl.mdinstal.narzedzia
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.res.Configuration
 import android.net.Uri
 import android.net.wifi.WifiManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +29,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -43,14 +46,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -260,6 +269,17 @@ private fun ipKey(ip: String): Long = try {
     ip.split(".").fold(0L) { a, p -> (a shl 8) or (p.toLong() and 0xFF) }
 } catch (e: Exception) { 0L }
 
+/** Liczba kanałów rejestratora z nazwy modelu (np. DS-7608NXI → 8). Kamery i nieznane modele: 1. */
+private fun nvrChannels(model: String): Int =
+    Regex("""^i?DS-[789]\d(\d{2})""", RegexOption.IGNORE_CASE).find(model.trim())?.groupValues?.get(1)?.toIntOrNull()
+        ?.takeIf { it in 1..64 } ?: 1
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 @Composable
 private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     val ctx = LocalContext.current
@@ -269,7 +289,6 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     var asking by remember { mutableStateOf(saved == null && d.activated) }
     var channel by remember { mutableStateOf(1) }
     var sub by remember { mutableStateOf(true) }
-    var tcp by remember { mutableStateOf(true) }
     var attempt by remember { mutableStateOf(0) }
     var live by remember { mutableStateOf(false) }
     var status by remember {
@@ -293,7 +312,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                 MediaPlayer.Event.Playing -> { live = true; status = "" }
                 MediaPlayer.Event.EncounteredError -> {
                     live = false
-                    status = "UWAGA: nie udało się odtworzyć obrazu — to może być błędny login/hasło, kodek lub transport. Nie ponawiam automatycznie. Sprawdź dane albo zmień strumień (pomocniczy H.264) lub TCP/UDP."
+                    status = "UWAGA: nie udało się odtworzyć obrazu — to może być błędny login/hasło albo kodek (strumień główny bywa w H.265). Nie ponawiam automatycznie. Sprawdź dane albo zmień strumień."
                 }
             }
         }
@@ -306,7 +325,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         }
     }
 
-    LaunchedEffect(creds, channel, sub, tcp, attempt) {
+    LaunchedEffect(creds, channel, sub, attempt) {
         val c = creds ?: return@LaunchedEffect
         live = false
         status = "Łączenie…"
@@ -317,7 +336,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         // Login i hasło jako osobne opcje — znaki takie jak @ w haśle nie psują adresu.
         media.addOption(":rtsp-user=${c.first}")
         media.addOption(":rtsp-pwd=${c.second}")
-        if (tcp) media.addOption(":rtsp-tcp")
+        media.addOption(":rtsp-tcp")
         media.addOption(":network-caching=300")
         media.setHWDecoderEnabled(true, false)
         player.media = media
@@ -332,7 +351,62 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         else -> "Łączenie"
     }
 
-    AppScaffold(d.model, onBack) { pad ->
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val maxCh = remember(d.model) { nvrChannels(d.model) }
+    var flash by remember { mutableStateOf("") }
+
+    // Pełny ekran w poziomie: chowamy paski systemowe; wyjście tylko przyciskiem wstecz.
+    DisposableEffect(landscape) {
+        val w = ctx.findActivity()?.window
+        val ctrl = w?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        if (landscape && ctrl != null) {
+            ctrl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            ctrl.hide(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose { ctrl?.show(WindowInsetsCompat.Type.systemBars()) }
+    }
+    LaunchedEffect(channel) {
+        if (landscape && maxCh > 1) {
+            flash = "Kanał $channel"
+            delay(1500)
+            flash = ""
+        }
+    }
+
+    if (landscape) {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            AndroidView(
+                factory = { VLCVideoLayout(it).also { v -> try { player.detachViews() } catch (e: Exception) { }; player.attachViews(v, null, false, false) } },
+                modifier = Modifier.fillMaxSize()
+            )
+            // Przezroczysta warstwa na gesty: przesunięcie w lewo/prawo zmienia kanał (rejestratory).
+            Box(
+                Modifier.fillMaxSize().pointerInput(maxCh) {
+                    var total = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { total = 0f },
+                        onDragEnd = {
+                            if (maxCh > 1) {
+                                if (total < -120f && channel < maxCh) channel++
+                                else if (total > 120f && channel > 1) channel--
+                            }
+                        },
+                        onHorizontalDrag = { _, dx -> total += dx }
+                    )
+                }
+            )
+            val overlay = if (!live) (if (creds == null) "Podgląd wyłączony" else status.ifEmpty { "Łączenie…" }) else flash
+            if (overlay.isNotEmpty()) {
+                Text(
+                    overlay,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(24.dp)
+                )
+            }
+        }
+    } else AppScaffold(d.model, onBack) { pad ->
         Column(
             Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -354,7 +428,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 AndroidView(
-                    factory = { VLCVideoLayout(it).also { v -> player.attachViews(v, null, false, false) } },
+                    factory = { VLCVideoLayout(it).also { v -> try { player.detachViews() } catch (e: Exception) { }; player.attachViews(v, null, false, false) } },
                     modifier = Modifier.fillMaxSize()
                 )
                 if (!live) {
@@ -366,6 +440,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                     )
                 }
             }
+            SubText("Obróć telefon w poziom, aby zobaczyć obraz na pełnym ekranie" + if (maxCh > 1) " (przesunięcie palcem zmienia kanał)." else ".")
 
             if (status.isNotEmpty() && !status.startsWith("Łączenie")) {
                 AppCard(Modifier.fillMaxWidth()) {
@@ -381,18 +456,15 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
             AppCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Strumień", fontWeight = FontWeight.Bold, color = cs.onSurface)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = sub, onClick = { sub = true }, label = { Text("Pomocniczy") })
-                        FilterChip(selected = !sub, onClick = { sub = false }, label = { Text("Główny") })
+                    OutlinedButton(onClick = { sub = !sub }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Strumień: " + if (sub) "pomocniczy (dotknij: główny)" else "główny (dotknij: pomocniczy)")
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = tcp, onClick = { tcp = true }, label = { Text("TCP") })
-                        FilterChip(selected = !tcp, onClick = { tcp = false }, label = { Text("UDP") })
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { if (channel > 1) channel-- }) { Text("−") }
-                        Text("Kanał $channel", color = cs.onSurface)
-                        OutlinedButton(onClick = { channel++ }) { Text("+") }
+                    if (maxCh > 1) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { if (channel > 1) channel-- }) { Text("−") }
+                            Text("Kanał $channel z $maxCh", color = cs.onSurface)
+                            OutlinedButton(onClick = { if (channel < maxCh) channel++ }) { Text("+") }
+                        }
                     }
                 }
             }
