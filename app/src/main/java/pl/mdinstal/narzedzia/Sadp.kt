@@ -3,31 +3,35 @@ package pl.mdinstal.narzedzia
 import android.content.Context
 import android.net.Uri
 import android.net.wifi.WifiManager
-import android.view.SurfaceView
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import android.util.Base64
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -37,20 +41,30 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import java.net.DatagramPacket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
 import java.net.NetworkInterface
+import java.net.Socket
+import java.security.MessageDigest
 import java.util.UUID
 
 // ───────────────────────────── SADP: wykrywanie ─────────────────────────────
@@ -150,7 +164,90 @@ private suspend fun sadpScan(ctx: Context, onFound: (SadpDevice) -> Unit) = with
     }
 }
 
+// ───────────────────────────── RTSP: jednorazowe sprawdzenie logowania ─────────────────────────────
+// Jedno zapytanie DESCRIBE z hasłem, zanim ruszy odtwarzacz. Dzięki temu wiemy na pewno, czy kamera
+// odrzuciła dane (i wtedy nie próbujemy więcej), a nie zgadujemy z ogólnego błędu odtwarzacza.
+
+private sealed class Probe {
+    object Ok : Probe()
+    object AuthFail : Probe()
+    class Err(val msg: String) : Probe()
+}
+
+private fun md5(s: String): String =
+    MessageDigest.getInstance("MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
+
+private fun challengeParams(h: String): Map<String, String> =
+    Regex("""(\w+)=(?:"([^"]*)"|([^,\s]+))""").findAll(h).associate { it.groupValues[1].lowercase() to (it.groupValues[2].ifEmpty { it.groupValues[3] }) }
+
+private fun rtspAsk(ip: String, uri: String, auth: String?): Pair<Int, String> {
+    Socket().use { s ->
+        s.connect(InetSocketAddress(ip, 554), 3000)
+        s.soTimeout = 4000
+        val req = "DESCRIBE $uri RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: MD-Tools\r\nAccept: application/sdp\r\n" +
+            (if (auth != null) "Authorization: $auth\r\n" else "") + "\r\n"
+        s.getOutputStream().apply { write(req.toByteArray()); flush() }
+        val sb = StringBuilder()
+        val ins = s.getInputStream()
+        while (!sb.endsWith("\r\n\r\n") && sb.length < 8192) {
+            val b = ins.read()
+            if (b < 0) break
+            sb.append(b.toChar())
+        }
+        val head = sb.toString()
+        val code = head.lineSequence().firstOrNull()?.split(" ")?.getOrNull(1)?.toIntOrNull() ?: 0
+        return code to head
+    }
+}
+
+private fun rtspProbe(ip: String, path: String, user: String, pass: String): Probe {
+    val uri = "rtsp://$ip:554/$path"
+    return try {
+        val (c1, h1) = rtspAsk(ip, uri, null)
+        if (c1 == 200) return Probe.Ok
+        if (c1 != 401) return Probe.Err("kamera odpowiedziała kodem RTSP $c1")
+        val lines = h1.lines().filter { it.startsWith("WWW-Authenticate", ignoreCase = true) }
+        val chal = (lines.firstOrNull { it.contains("Digest", ignoreCase = true) } ?: lines.firstOrNull())
+            ?.substringAfter(":")?.trim() ?: return Probe.Err("brak wyzwania logowania w odpowiedzi kamery")
+        val auth = if (chal.startsWith("Basic", ignoreCase = true)) {
+            "Basic " + Base64.encodeToString("$user:$pass".toByteArray(), Base64.NO_WRAP)
+        } else {
+            val p = challengeParams(chal)
+            val realm = p["realm"] ?: ""
+            val nonce = p["nonce"] ?: ""
+            val qop = p["qop"]?.split(",")?.map { it.trim() }?.firstOrNull { it == "auth" }
+            val cnonce = UUID.randomUUID().toString().replace("-", "").take(16)
+            val ha1 = md5("$user:$realm:$pass")
+            val ha2 = md5("DESCRIBE:$uri")
+            val resp = if (qop != null) md5("$ha1:$nonce:00000001:$cnonce:$qop:$ha2") else md5("$ha1:$nonce:$ha2")
+            buildString {
+                append("Digest username=\"$user\", realm=\"$realm\", nonce=\"$nonce\", uri=\"$uri\", response=\"$resp\"")
+                if (qop != null) append(", qop=$qop, nc=00000001, cnonce=\"$cnonce\"")
+                p["opaque"]?.let { append(", opaque=\"$it\"") }
+            }
+        }
+        val (c2, _) = rtspAsk(ip, uri, auth)
+        when (c2) {
+            200 -> Probe.Ok
+            401, 403 -> Probe.AuthFail
+            else -> Probe.Err("kamera odpowiedziała kodem RTSP $c2")
+        }
+    } catch (e: Exception) {
+        Probe.Err(e.message ?: "brak połączenia na porcie 554")
+    }
+}
+
 // ───────────────────────────── UI ─────────────────────────────
+
+@Composable
+private fun CamStat(value: String, label: String, color: Color, modifier: Modifier = Modifier) {
+    AppCard(modifier) {
+        Column(Modifier.padding(12.dp)) {
+            Text(value, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = color)
+            SubText(label)
+        }
+    }
+}
 
 @Composable
 fun SadpScreen(onBack: () -> Unit) {
@@ -179,51 +276,52 @@ fun SadpScreen(onBack: () -> Unit) {
         return
     }
 
-    AppScaffold("SADP Hikvision", onBack) { pad ->
+    val cs = MaterialTheme.colorScheme
+    val activeCount = devices.count { it.activated }
+    AppScaffold("Kamery Hikvision", onBack) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                CamStat(devices.size.toString(), "urządzeń", cs.onSurface, Modifier.weight(1f))
+                CamStat(activeCount.toString(), "aktywnych", OnlineGreen, Modifier.weight(1f))
+                CamStat((devices.size - activeCount).toString(), "nieaktywnych", cs.onSurfaceVariant, Modifier.weight(1f))
+            }
             Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp),
+                Modifier.fillMaxWidth().padding(top = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 if (scanning) OutlinedButton(onClick = { job?.cancel() }) { Text("Stop") }
-                else Button(onClick = { scan() }) { Text("Szukaj") }
-                SubText(if (scanning) "Szukanie… znaleziono ${devices.size}" else "Znaleziono ${devices.size}")
+                else Button(onClick = { scan() }) { Text("Szukaj ponownie") }
+                SubText(if (scanning) "Szukanie w sieci…" else "Wyszukiwanie SADP zakończone")
             }
-            SubText(
-                "Tylko wyszukiwanie — aplikacja niczego nie zmienia w urządzeniach. Dotknij kamery, aby zobaczyć obraz.",
-                Modifier.padding(top = 8.dp)
-            )
             if (!scanning && devices.isEmpty()) {
                 SubText(
                     "Nie znaleziono urządzeń. Połącz telefon z tą samą siecią co kamery (Wi-Fi lub hotspot) i spróbuj ponownie.",
                     Modifier.padding(top = 16.dp)
                 )
+            } else {
+                SubText("Tylko wyszukiwanie — aplikacja niczego nie zmienia w urządzeniach. Dotknij kamery, aby zobaczyć obraz.", Modifier.padding(top = 8.dp, bottom = 4.dp))
             }
-            LazyColumn(Modifier.weight(1f).padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.weight(1f).padding(top = 4.dp)) {
                 items(devices.sortedBy { ipKey(it.ip) }, key = { it.ip + it.mac }) { d ->
-                    AppCard(Modifier.fillMaxWidth(), onClick = { selected = d }) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { selected = d }) {
+                        Column(Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    d.ip,
-                                    modifier = Modifier.weight(1f),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                if (!d.activated) {
-                                    Text("NIEAKTYWOWANA", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                                Box(Modifier.size(10.dp).clip(CircleShape).background(if (d.activated) OnlineGreen else cs.outline))
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(d.ip, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = cs.onSurface)
+                                    SubText(d.model)
                                 }
+                                StatusPill(if (d.activated) "Aktywna" else "Nieaktywna", d.activated)
                             }
-                            Text(d.model, color = MaterialTheme.colorScheme.onSurface)
                             SubText(
                                 listOf(
                                     d.serial.takeIf { it.isNotEmpty() }?.let { "SN: $it" },
                                     d.mac.takeIf { it.isNotEmpty() }?.let { "MAC: ${it.uppercase()}" },
-                                    d.firmware.takeIf { it.isNotEmpty() }?.let { "FW: $it" },
-                                    "HTTP: ${d.httpPort}"
-                                ).filterNotNull().joinToString(" • ")
+                                    d.firmware.takeIf { it.isNotEmpty() }?.let { "FW: $it" }
+                                ).filterNotNull().joinToString(" • "),
+                                Modifier.padding(top = 8.dp)
                             )
                         }
                     }
@@ -240,6 +338,7 @@ private fun ipKey(ip: String): Long = try {
 @Composable
 private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     val ctx = LocalContext.current
+    val cs = MaterialTheme.colorScheme
     val saved = remember { Prefs.camCreds(ctx) }
     val bad = remember { Prefs.camBad(ctx) }
     // Odrzucone wcześniej dane nie są używane automatycznie.
@@ -249,6 +348,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     var sub by remember { mutableStateOf(true) }
     var tcp by remember { mutableStateOf(true) }
     var attempt by remember { mutableStateOf(0) }
+    var live by remember { mutableStateOf(false) }
     var status by remember {
         mutableStateOf(
             when {
@@ -261,78 +361,145 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     var user by remember { mutableStateOf(Prefs.camUser(ctx)) }
     var pass by remember { mutableStateOf("") }
 
-    AppScaffold("${d.model} • ${d.ip}", onBack) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
-            val c = creds
-            if (c != null) {
-                val player = remember(c, channel, sub, tcp, attempt) { ExoPlayer.Builder(ctx).build() }
-                DisposableEffect(player) {
-                    val listener = object : Player.Listener {
-                        override fun onPlaybackStateChanged(state: Int) {
-                            if (state == Player.STATE_READY) status = ""
-                            else if (state == Player.STATE_BUFFERING) status = "Łączenie…"
-                        }
+    val vlc = remember { LibVLC(ctx.applicationContext, arrayListOf("--network-caching=300")) }
+    val player = remember { MediaPlayer(vlc) }
 
-                        override fun onPlayerError(error: PlaybackException) {
-                            val text = generateSequence<Throwable>(error) { it.cause }.mapNotNull { it.message }.joinToString(" ")
-                            if (text.contains("401") || text.contains("Unauthorized", ignoreCase = true)) {
-                                // Jedna nieudana próba i koniec — bez ponawiania, żeby kamera nie zablokowała konta.
-                                Prefs.setCamBad(ctx, true)
-                                creds = null
-                                status = "UWAGA: kamera odrzuciła login lub hasło. Nie próbuję ponownie, żeby jej nie zablokować — wpisz poprawne dane."
-                            } else {
-                                // Diagnostyka na ekranie (adres bez hasła) — do porównania z VLC.
-                                status = "Nie udało się połączyć: ${error.errorCodeName}\n$text\n" +
-                                    "Adres: rtsp://${c.first}:***@${d.ip}:554/Streaming/Channels/$channel" + (if (sub) "02" else "01") +
-                                    " (${if (tcp) "TCP" else "UDP"})"
-                            }
-                        }
+    DisposableEffect(Unit) {
+        player.setEventListener { e ->
+            when (e.type) {
+                MediaPlayer.Event.Playing -> { live = true; status = "" }
+                MediaPlayer.Event.EncounteredError -> {
+                    live = false
+                    // Logowanie sprawdzone wcześniej, więc to nie hasło — raczej kodek, transport lub RTSP w kamerze.
+                    status = "Błąd odtwarzania. Spróbuj strumienia pomocniczego (H.264) albo przełącz transport TCP/UDP."
+                }
+            }
+        }
+        onDispose {
+            player.setEventListener(null)
+            try { player.stop() } catch (e: Exception) { }
+            try { player.detachViews() } catch (e: Exception) { }
+            player.release()
+            vlc.release()
+        }
+    }
+
+    LaunchedEffect(creds, channel, sub, tcp, attempt) {
+        val c = creds ?: return@LaunchedEffect
+        live = false
+        status = "Łączenie…"
+        player.stop()
+        val path = "Streaming/Channels/$channel" + (if (sub) "02" else "01")
+        when (val pr = withContext(Dispatchers.IO) { rtspProbe(d.ip, path, c.first, c.second) }) {
+            is Probe.AuthFail -> {
+                // Jedna nieudana próba i koniec — bez ponawiania, żeby kamera nie zablokowała konta.
+                Prefs.setCamBad(ctx, true)
+                creds = null
+                status = "UWAGA: kamera odrzuciła login lub hasło. Nie próbuję ponownie, żeby jej nie zablokować — wpisz poprawne dane."
+                return@LaunchedEffect
+            }
+            is Probe.Err -> {
+                status = "Nie udało się połączyć z kamerą: ${pr.msg}. Sprawdź, czy RTSP (port 554) jest włączone."
+                return@LaunchedEffect
+            }
+            Probe.Ok -> {}
+        }
+        val media = Media(vlc, Uri.parse("rtsp://${d.ip}:554/$path"))
+        // Login i hasło jako osobne opcje — znaki takie jak @ w haśle nie psują adresu.
+        media.addOption(":rtsp-user=${c.first}")
+        media.addOption(":rtsp-pwd=${c.second}")
+        if (tcp) media.addOption(":rtsp-tcp")
+        media.addOption(":network-caching=300")
+        media.setHWDecoderEnabled(true, false)
+        player.media = media
+        media.release()
+        player.play()
+    }
+
+    val phase = when {
+        live -> "Na żywo"
+        creds == null -> "Brak danych"
+        status.startsWith("UWAGA") || status.startsWith("Błąd") || status.startsWith("Nie udało") -> "Błąd"
+        else -> "Łączenie"
+    }
+
+    AppScaffold(d.model, onBack) { pad ->
+        Column(
+            Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            AppCard(Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(10.dp).clip(CircleShape).background(if (live) OnlineGreen else cs.outline))
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(d.ip, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = cs.onSurface)
+                        SubText(d.model)
                     }
-                    player.addListener(listener)
-                    val url = "rtsp://${Uri.encode(c.first)}:${Uri.encode(c.second)}@${d.ip}:554/Streaming/Channels/$channel" +
-                        (if (sub) "02" else "01")
-                    val src = RtspMediaSource.Factory()
-                        .setForceUseRtpTcp(tcp)
-                        .setTimeoutMs(8000)
-                        .createMediaSource(MediaItem.fromUri(url))
-                    status = "Łączenie…"
-                    player.setMediaSource(src)
-                    player.prepare()
-                    player.playWhenReady = true
-                    onDispose {
-                        player.removeListener(listener)
-                        player.release()
+                    StatusPill(phase, live)
+                }
+            }
+
+            Box(
+                Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(16.dp)).background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                AndroidView(
+                    factory = { VLCVideoLayout(it).also { v -> player.attachViews(v, null, false, false) } },
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (!live) {
+                    Text(
+                        if (creds == null) "Podgląd wyłączony" else "Łączenie…",
+                        color = Color.White.copy(alpha = 0.7f),
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            if (status.isNotEmpty() && !status.startsWith("Łączenie")) {
+                AppCard(Modifier.fillMaxWidth()) {
+                    Text(
+                        status,
+                        modifier = Modifier.padding(14.dp),
+                        fontSize = 13.sp,
+                        color = if (status.startsWith("UWAGA")) cs.error else cs.onSurfaceVariant
+                    )
+                }
+            }
+
+            AppCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Strumień", fontWeight = FontWeight.Bold, color = cs.onSurface)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = sub, onClick = { sub = true }, label = { Text("Pomocniczy") })
+                        FilterChip(selected = !sub, onClick = { sub = false }, label = { Text("Główny") })
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(selected = tcp, onClick = { tcp = true }, label = { Text("TCP") })
+                        FilterChip(selected = !tcp, onClick = { tcp = false }, label = { Text("UDP") })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { if (channel > 1) channel-- }) { Text("−") }
+                        Text("Kanał $channel", color = cs.onSurface)
+                        OutlinedButton(onClick = { channel++ }) { Text("+") }
                     }
                 }
-                AndroidView(
-                    factory = { SurfaceView(it) },
-                    update = { player.setVideoSurfaceView(it) },
-                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
-                )
             }
-            if (status.isNotEmpty()) {
-                Text(
-                    status,
-                    modifier = Modifier.padding(top = 8.dp),
-                    fontSize = 13.sp,
-                    color = if (status.startsWith("UWAGA")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+
+            AppCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Urządzenie", fontWeight = FontWeight.Bold, color = cs.onSurface)
+                    if (d.serial.isNotEmpty()) SubText("Numer seryjny: ${d.serial}")
+                    if (d.mac.isNotEmpty()) SubText("MAC: ${d.mac.uppercase()}")
+                    if (d.firmware.isNotEmpty()) SubText("Firmware: ${d.firmware}")
+                    SubText("Port HTTP: ${d.httpPort}")
+                }
             }
-            Row(
-                Modifier.padding(top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = { if (channel > 1) channel-- }) { Text("−") }
-                Text("Kanał $channel", color = MaterialTheme.colorScheme.onBackground)
-                OutlinedButton(onClick = { channel++ }) { Text("+") }
-                OutlinedButton(onClick = { sub = !sub }) { Text(if (sub) "Strumień pomocniczy" else "Strumień główny") }
-            }
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { tcp = !tcp }) { Text("Transport: " + if (tcp) "TCP" else "UDP") }
-            }
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (d.activated) OutlinedButton(onClick = { pass = ""; asking = true }) { Text("Wpisz dane logowania") }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (d.activated) OutlinedButton(onClick = { pass = ""; asking = true }) { Text("Dane logowania") }
                 if (creds != null) OutlinedButton(onClick = { attempt++ }) { Text("Połącz ponownie") }
             }
         }

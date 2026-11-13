@@ -23,6 +23,9 @@ android {
         versionName = propVersionName
 
         // Repo updatera — na sztywno, zawsze to samo (kolczan07/MD-Tools)
+        // LibVLC jest duży — tylko nowoczesne telefony (arm64), żeby nie pompować pliku APK.
+        ndk { abiFilters += listOf("arm64-v8a") }
+
         buildConfigField("String", "UPDATE_REPO", "\"kolczan07/MD-Tools\"")
     }
 
@@ -87,10 +90,12 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.0")
 
     // Media3 (radio w tle — masz już RadioService)
-    implementation("androidx.media3:media3-exoplayer:1.4.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.4.1") // podgląd kamer (SADP)
-    implementation("androidx.media3:media3-session:1.4.1")
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
+    implementation("androidx.media3:media3-session:1.3.1")
+
+    // Podgląd kamer Hikvision (SADP): VLC, bo ExoPlayer psuje adres RTSP z hasłem zawierającym @
+    implementation("org.videolan.android:libvlc-all:3.6.0")
 
     // Updater — HTTP + JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
