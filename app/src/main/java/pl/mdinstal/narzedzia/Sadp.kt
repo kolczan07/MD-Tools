@@ -355,6 +355,13 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     val maxCh = remember(d.model) { nvrChannels(d.model) }
     var flash by remember { mutableStateOf("") }
 
+    // Po obrocie powstaje nowa powierzchnia wideo, a działający już strumień nie przenosi się na nią
+    // (został dźwięk i czarny ekran) — dlatego po zmianie orientacji łączymy się od nowa.
+    var firstOrientation by remember { mutableStateOf(true) }
+    LaunchedEffect(landscape) {
+        if (firstOrientation) firstOrientation = false else attempt++
+    }
+
     // Pełny ekran w poziomie: chowamy paski systemowe; wyjście tylko przyciskiem wstecz.
     DisposableEffect(landscape) {
         val w = ctx.findActivity()?.window

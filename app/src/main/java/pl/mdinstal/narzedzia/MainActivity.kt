@@ -144,6 +144,7 @@ fun App(themeMode: String, onTheme: (String) -> Unit) {
                 Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
                 Screen.Wifi -> WifiScreen(onBack = { back() })
                 Screen.Lan -> LanScreen(onBack = { back() })
+                Screen.Mail -> MailScreen(onBack = { back() })
                 Screen.Sadp -> SadpScreen(onBack = { back() })
                 Screen.Weather -> WeatherScreen(onBack = { back() })
                 Screen.Iglutech -> IglutechScreen(onBack = { back() }, openSerial = pendingSerial)

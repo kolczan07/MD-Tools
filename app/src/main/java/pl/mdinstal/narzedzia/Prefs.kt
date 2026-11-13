@@ -141,6 +141,10 @@ object Prefs {
 
     fun setGoogleAccount(c: Context, email: String) { sp(c).edit().putString("google_account", email).apply() }
 
+    fun mailAccount(c: Context): String = sp(c).getString("mail_account", "") ?: ""
+
+    fun setMailAccount(c: Context, email: String) { sp(c).edit().putString("mail_account", email).apply() }
+
     fun clearGoogleAccount(c: Context) { sp(c).edit().remove("google_account").apply() }
 
     /** Domyślne konto Google: login do Asaj, jeśli jest adresem e-mail (jedno konto firmowe). */

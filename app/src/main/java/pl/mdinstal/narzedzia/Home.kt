@@ -48,10 +48,11 @@ private data class Tile(val icon: String, val title: String, val desc: String, v
 
 private val tools = listOf(
     Tile("📻", "Radio internetowe", "Wyszukiwarka stacji, ulubione, gra w tle", Screen.Radio),
-    Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN", Screen.Network),
-    Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
+    Tile("✉️", "Poczta", "Konto firmowe Gmail", Screen.Mail),
     Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null, R.drawable.logo_iglu_tile, logoWide = false),
-    Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj, R.drawable.logo_asaj)
+    Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj, R.drawable.logo_asaj),
+    Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN", Screen.Network),
+    Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather)
 )
 
 private val docs = listOf(
