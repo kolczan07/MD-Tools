@@ -77,6 +77,9 @@ fun SettingsScreen(
             SectionTitle("Logowanie")
             NavCard("Ustawienia użytkownika", "Portal IGLU, Asaj.pl, konto Google (kopia na Drive)") { onOpen(Screen.UserSettings) }
 
+            SectionTitle("Skróty")
+            NavCard("Skróty do aplikacji", "Wybrane aplikacje pojawią się na ekranie głównym w sekcji Aplikacje") { onOpen(Screen.Shortcuts) }
+
             SectionTitle("Aktualizacje")
             UpdateCard()
 

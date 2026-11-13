@@ -5,8 +5,6 @@ package pl.mdinstal.narzedzia
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -83,7 +81,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import java.io.File
 import java.net.ConnectException
 import java.net.Inet4Address
 import java.net.InetAddress
@@ -106,12 +103,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 @Composable
 fun NetworkScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
+    val ctx = LocalContext.current
     AppScaffold("Sieć", onBack) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             NetTile("Speedtest", "Prędkość internetu (FIREPROBE)") { onOpen(Screen.Speedtest) }
             NetTile("Skaner WiFi", "Spektrum, kanały i siła sygnału") { onOpen(Screen.Wifi) }
             NetTile("Skaner LAN", "Wykrywanie urządzeń w sieci lokalnej") { onOpen(Screen.Lan) }
-            NetTile("ARP", "Tablica ARP (odpowiednik arp -a)") { onOpen(Screen.Arp) }
+            NetTile("Hotspot", "Ustawienia hotspotu i tetheringu telefonu (wbudowany serwer DHCP)") { openTetherSettings(ctx) }
         }
     }
 }
@@ -789,68 +787,26 @@ private fun webUrl(h: LanHost): String? = when {
     else -> null
 }
 
+/** Otwiera systemowe ustawienia hotspotu/tetheringu; gdy producent ich nie udostępnia, ogólne ustawienia sieci. */
+private fun openTetherSettings(ctx: Context) {
+    val tries = listOf(
+        Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
+        Intent("android.settings.TETHER_SETTINGS"),
+        Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)
+    )
+    for (i in tries) {
+        try {
+            ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            return
+        } catch (e: Exception) { }
+    }
+}
+
 private fun openUrl(ctx: Context, url: String) {
     try {
         ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: Exception) { }
 }
-
-// ───────────────────────────── ARP: MODEL ─────────────────────────────
-
-private data class ArpEntry(val ip: String, val mac: String, val iface: String, val complete: Boolean, val state: String)
-
-private data class ArpResult(val entries: List<ArpEntry>, val source: String, val note: String?)
-
-private val IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
-
-private fun readArp(): ArpResult {
-    // 1) /proc/net/arp
-    val fromProc: List<ArpEntry> = try {
-        File("/proc/net/arp").readLines().drop(1).mapNotNull { line ->
-            val t = line.trim().split(Regex("\\s+"))
-            if (t.size < 6 || !IPV4.matches(t[0])) return@mapNotNull null
-            val flags = t[2].removePrefix("0x").toIntOrNull(16) ?: 0
-            val complete = (flags and 2) != 0 && t[3] != "00:00:00:00:00:00"
-            ArpEntry(t[0], if (complete) t[3].lowercase() else "", t[5], complete, if (complete) "complete" else "incomplete")
-        }
-    } catch (e: Exception) {
-        emptyList()
-    }
-    if (fromProc.isNotEmpty()) return ArpResult(fromProc, "/proc/net/arp", null)
-
-    // 2) ip neigh
-    val fromIp: List<ArpEntry> = try {
-        val p = ProcessBuilder("ip", "neigh").redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().readText()
-        p.waitFor()
-        out.lines().mapNotNull { line ->
-            val t = line.trim().split(Regex("\\s+"))
-            if (t.isEmpty() || !IPV4.matches(t[0])) return@mapNotNull null
-            val ll = t.indexOf("lladdr")
-            val dev = t.indexOf("dev")
-            val mac = if (ll >= 0 && ll + 1 < t.size) t[ll + 1].lowercase() else ""
-            ArpEntry(t[0], mac, if (dev >= 0 && dev + 1 < t.size) t[dev + 1] else "?", mac.isNotEmpty(), t.last())
-        }
-    } catch (e: Exception) {
-        emptyList()
-    }
-    if (fromIp.isNotEmpty()) return ArpResult(fromIp, "ip neigh", null)
-
-    return ArpResult(
-        emptyList(), "",
-        "Brak wpisów ARP. Od Androida 10 system blokuje aplikacjom dostęp do /proc/net/arp i do „ip neigh” " +
-            "— jeśli lista jest pusta mimo aktywnej sieci, to ograniczenie systemu, a nie błąd aplikacji. " +
-            "Skaner LAN działa nadal (IP, nazwy, otwarte porty), ale bez adresów MAC."
-    )
-}
-
-private fun isLocalMac(mac: String): Boolean =
-    mac.length >= 2 && ((mac.substring(0, 2).toIntOrNull(16) ?: 0) and 2) != 0
-
-private fun arpText(r: ArpResult): String =
-    r.entries.sortedBy { ipToLong(it.ip) }.joinToString("\n") {
-        "? (${it.ip}) at ${if (it.complete) it.mac else "<incomplete>"} [ether] on ${it.iface}"
-    }
 
 // ───────────────────────────── LAN: UI ─────────────────────────────
 
@@ -887,7 +843,6 @@ private fun LanRowContent(h: LanHost, isGateway: Boolean) {
         h.name?.let { SubText(it) }
         val extra = buildList {
             if (h.ports.isNotEmpty()) add("Porty: ${h.ports.joinToString(", ")}")
-            h.mac?.let { add("MAC: ${it.uppercase()}") }
         }
         if (extra.isNotEmpty()) SubText(extra.joinToString(" • "), Modifier.padding(top = 2.dp))
     }
@@ -925,18 +880,6 @@ fun LanScreen(onBack: () -> Unit) {
                                 done++
                             }
                         }
-                    }
-                }
-                // uzupełnienie o MAC z tablicy ARP (jeśli system pozwala)
-                val arp = withContext(Dispatchers.IO) { readArp() }
-                val macs = arp.entries.filter { it.complete && inLan(it.ip, li) }.associate { it.ip to it.mac }
-                withContext(Dispatchers.Main) {
-                    for (i in hosts.indices) {
-                        val m = macs[hosts[i].ip]
-                        if (m != null) hosts[i] = hosts[i].copy(mac = m)
-                    }
-                    macs.forEach { (ip, mac) ->
-                        if (hosts.none { it.ip == ip }) hosts.add(LanHost(ip = ip, mac = mac))
                     }
                 }
             } finally {
@@ -997,78 +940,6 @@ fun LanScreen(onBack: () -> Unit) {
                             AppCard(Modifier.fillMaxWidth(), onClick = { openUrl(ctx, url) }) { LanRowContent(h, gw) }
                         } else {
                             AppCard(Modifier.fillMaxWidth()) { LanRowContent(h, gw) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ───────────────────────────── ARP: UI ─────────────────────────────
-
-@Composable
-fun ArpScreen(onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    var tick by remember { mutableStateOf(0) }
-    var res by remember { mutableStateOf<ArpResult?>(null) }
-
-    LaunchedEffect(tick) { res = withContext(Dispatchers.IO) { readArp() } }
-
-    AppScaffold("ARP", onBack) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
-            val r = res
-            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = { tick++ }) { Text("Odśwież") }
-                OutlinedButton(
-                    enabled = r != null && r.entries.isNotEmpty(),
-                    onClick = {
-                        if (r != null) {
-                            val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            cm.setPrimaryClip(ClipData.newPlainText("arp -a", arpText(r)))
-                        }
-                    }
-                ) { Text("Kopiuj (arp -a)") }
-            }
-            if (r == null) {
-                SubText("Odczyt…", Modifier.padding(top = 16.dp))
-            } else if (r.entries.isEmpty()) {
-                SubText(r.note ?: "Brak wpisów ARP.", Modifier.padding(top = 16.dp))
-            } else {
-                SubText("Źródło: ${r.source} • ${r.entries.size} wpisów", Modifier.padding(top = 12.dp))
-                LazyColumn(
-                    modifier = Modifier.weight(1f).padding(top = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(r.entries.sortedBy { ipToLong(it.ip) }, key = { it.ip + it.iface }) { e ->
-                        AppCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        e.ip,
-                                        modifier = Modifier.weight(1f),
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        e.state,
-                                        fontSize = 11.sp,
-                                        color = if (e.complete) GREEN else YELLOW
-                                    )
-                                }
-                                Text(
-                                    if (e.complete) e.mac.uppercase() else "(niekompletny)",
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                                SubText(
-                                    "Interfejs: ${e.iface}" +
-                                        (if (e.complete && isLocalMac(e.mac)) " • MAC losowy/lokalny" else ""),
-                                    Modifier.padding(top = 2.dp)
-                                )
-                            }
                         }
                     }
                 }

@@ -26,7 +26,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,10 +48,9 @@ private data class Tile(val icon: String, val title: String, val desc: String, v
 
 private val tools = listOf(
     Tile("📻", "Radio internetowe", "Wyszukiwarka stacji, ulubione, gra w tle", Screen.Radio),
-    Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN, ARP", Screen.Network),
+    Tile("📶", "Sieć", "Speedtest, Skaner WiFi, Skaner LAN", Screen.Network),
     Tile("⛅", "Pogoda", "Prognoza 7-dniowa i godzinowa", Screen.Weather),
     Tile("🔧", "Iglutech Service", "Lista pomp, status Online, wejście do portalu", null, R.drawable.logo_iglu_tile, logoWide = false),
-    Tile("🔲", "Skróty", "Szybki dostęp do ulubionych aplikacji", Screen.Shortcuts),
     Tile("🏬", "Asaj", "Dokumenty WZ (PDF), limit kredytowy", Screen.Asaj, R.drawable.logo_asaj)
 )
 
@@ -85,6 +89,15 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
         SectionTitle("Dokumenty")
         TileGrid(docs, onOpen, onOpenPumps)
 
+        // Sekcja "Aplikacje" widoczna tylko wtedy, gdy w Ustawieniach → Skróty dodano jakąś aplikację.
+        val ctx = LocalContext.current
+        val apps = remember { Prefs.shortcuts(ctx).filter { ctx.packageManager.getLaunchIntentForPackage(it.pkg) != null } }
+        if (apps.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            SectionTitle("Aplikacje")
+            AppsGrid(apps)
+        }
+
         Row(
             Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp).alpha(0.7f),
             horizontalArrangement = Arrangement.End,
@@ -93,6 +106,45 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
             Text("MD-Tools", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = cs.onBackground)
             Box(Modifier.padding(horizontal = 8.dp).width(40.dp).height(2.dp).background(cs.primary))
             Text("TECH", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = cs.primary, letterSpacing = 2.sp)
+        }
+    }
+}
+
+@Composable
+private fun AppsGrid(apps: List<Shortcut>) {
+    val ctx = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        apps.chunked(3).forEach { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                row.forEach { s ->
+                    AppCard(
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            ctx.packageManager.getLaunchIntentForPackage(s.pkg)?.let {
+                                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                ctx.startActivity(it)
+                            }
+                        }
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            AppIcon(s.pkg, 56)
+                            Text(
+                                s.label,
+                                modifier = Modifier.padding(top = 8.dp),
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
         }
     }
 }

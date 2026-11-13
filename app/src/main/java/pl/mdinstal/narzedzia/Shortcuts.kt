@@ -56,7 +56,7 @@ private fun launchableApps(ctx: Context): List<AppInfo> {
 }
 
 @Composable
-private fun AppIcon(pkg: String, size: Int) {
+fun AppIcon(pkg: String, size: Int) {
     val ctx = LocalContext.current
     val bmp = remember(pkg) {
         try {
