@@ -247,6 +247,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     var asking by remember { mutableStateOf(saved == null && d.activated) }
     var channel by remember { mutableStateOf(1) }
     var sub by remember { mutableStateOf(true) }
+    var tcp by remember { mutableStateOf(true) }
     var attempt by remember { mutableStateOf(0) }
     var status by remember {
         mutableStateOf(
@@ -264,7 +265,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
             val c = creds
             if (c != null) {
-                val player = remember(c, channel, sub, attempt) { ExoPlayer.Builder(ctx).build() }
+                val player = remember(c, channel, sub, tcp, attempt) { ExoPlayer.Builder(ctx).build() }
                 DisposableEffect(player) {
                     val listener = object : Player.Listener {
                         override fun onPlaybackStateChanged(state: Int) {
@@ -280,7 +281,10 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                                 creds = null
                                 status = "UWAGA: kamera odrzuciła login lub hasło. Nie próbuję ponownie, żeby jej nie zablokować — wpisz poprawne dane."
                             } else {
-                                status = "Nie udało się połączyć (RTSP, port 554). Sprawdź, czy RTSP jest włączone w kamerze."
+                                // Diagnostyka na ekranie (adres bez hasła) — do porównania z VLC.
+                                status = "Nie udało się połączyć: ${error.errorCodeName}\n$text\n" +
+                                    "Adres: rtsp://${c.first}:***@${d.ip}:554/Streaming/Channels/$channel" + (if (sub) "02" else "01") +
+                                    " (${if (tcp) "TCP" else "UDP"})"
                             }
                         }
                     }
@@ -288,7 +292,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                     val url = "rtsp://${Uri.encode(c.first)}:${Uri.encode(c.second)}@${d.ip}:554/Streaming/Channels/$channel" +
                         (if (sub) "02" else "01")
                     val src = RtspMediaSource.Factory()
-                        .setForceUseRtpTcp(true)
+                        .setForceUseRtpTcp(tcp)
                         .setTimeoutMs(8000)
                         .createMediaSource(MediaItem.fromUri(url))
                     status = "Łączenie…"
@@ -323,6 +327,9 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                 Text("Kanał $channel", color = MaterialTheme.colorScheme.onBackground)
                 OutlinedButton(onClick = { channel++ }) { Text("+") }
                 OutlinedButton(onClick = { sub = !sub }) { Text(if (sub) "Strumień pomocniczy" else "Strumień główny") }
+            }
+            Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { tcp = !tcp }) { Text("Transport: " + if (tcp) "TCP" else "UDP") }
             }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (d.activated) OutlinedButton(onClick = { pass = ""; asking = true }) { Text("Wpisz dane logowania") }
