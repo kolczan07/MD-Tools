@@ -3,7 +3,6 @@ package pl.mdinstal.narzedzia
 import android.content.Context
 import android.net.Uri
 import android.net.wifi.WifiManager
-import android.util.Base64
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -63,8 +63,6 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
 import java.net.NetworkInterface
-import java.net.Socket
-import java.security.MessageDigest
 import java.util.UUID
 
 // ───────────────────────────── SADP: wykrywanie ─────────────────────────────
@@ -161,86 +159,6 @@ private suspend fun sadpScan(ctx: Context, onFound: (SadpDevice) -> Unit) = with
     } finally {
         try { sock?.close() } catch (e: Exception) { }
         try { lock.release() } catch (e: Exception) { }
-    }
-}
-
-// ───────────────────────────── RTSP: jednorazowe sprawdzenie logowania ─────────────────────────────
-// Jedno zapytanie DESCRIBE z hasłem, zanim ruszy odtwarzacz. Dzięki temu wiemy na pewno, czy kamera
-// odrzuciła dane (i wtedy nie próbujemy więcej), a nie zgadujemy z ogólnego błędu odtwarzacza.
-
-private sealed class Probe {
-    object Ok : Probe()
-    class AuthFail(val info: String) : Probe()
-    class Err(val msg: String) : Probe()
-}
-
-private fun hashHex(alg: String, s: String): String =
-    MessageDigest.getInstance(if (alg.contains("256")) "SHA-256" else "MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
-
-private fun challengeParams(h: String): Map<String, String> =
-    Regex("""(\w+)=(?:"([^"]*)"|([^,\s]+))""").findAll(h).associate { it.groupValues[1].lowercase() to (it.groupValues[2].ifEmpty { it.groupValues[3] }) }
-
-private fun rtspAsk(ip: String, uri: String, auth: String?): Pair<Int, String> {
-    Socket().use { s ->
-        s.connect(InetSocketAddress(ip, 554), 3000)
-        s.soTimeout = 4000
-        val req = "DESCRIBE $uri RTSP/1.0\r\nCSeq: 1\r\nUser-Agent: MD-Tools\r\nAccept: application/sdp\r\n" +
-            (if (auth != null) "Authorization: $auth\r\n" else "") + "\r\n"
-        s.getOutputStream().apply { write(req.toByteArray()); flush() }
-        val sb = StringBuilder()
-        val ins = s.getInputStream()
-        while (!sb.endsWith("\r\n\r\n") && sb.length < 8192) {
-            val b = ins.read()
-            if (b < 0) break
-            sb.append(b.toChar())
-        }
-        val head = sb.toString()
-        val code = head.lineSequence().firstOrNull()?.split(" ")?.getOrNull(1)?.toIntOrNull() ?: 0
-        return code to head
-    }
-}
-
-private fun rtspProbe(ip: String, path: String, user: String, pass: String): Probe {
-    val uri = "rtsp://$ip:554/$path"
-    return try {
-        val (c1, h1) = rtspAsk(ip, uri, null)
-        if (c1 == 200) return Probe.Ok
-        if (c1 != 401) return Probe.Err("kamera odpowiedziała kodem RTSP $c1")
-        val lines = h1.lines().filter { it.startsWith("WWW-Authenticate", ignoreCase = true) }.map { it.substringAfter(":").trim() }
-        // Nowsze firmware podaje kilka wyzwań Digest naraz (np. MD5 i SHA-256) — wybieramy MD5, a SHA-256 tylko gdy nie ma innego.
-        val digests = lines.filter { it.startsWith("Digest", ignoreCase = true) }
-        val chal = digests.firstOrNull { challengeParams(it)["algorithm"].let { a -> a == null || a.equals("MD5", true) } }
-            ?: digests.firstOrNull() ?: lines.firstOrNull() ?: return Probe.Err("brak wyzwania logowania w odpowiedzi kamery")
-        var scheme = "Basic"
-        var alg = ""
-        val auth = if (chal.startsWith("Basic", ignoreCase = true)) {
-            "Basic " + Base64.encodeToString("$user:$pass".toByteArray(), Base64.NO_WRAP)
-        } else {
-            val p = challengeParams(chal)
-            scheme = "Digest"
-            alg = p["algorithm"] ?: "MD5"
-            val realm = p["realm"] ?: ""
-            val nonce = p["nonce"] ?: ""
-            val qop = p["qop"]?.split(",")?.map { it.trim() }?.firstOrNull { it == "auth" }
-            val cnonce = UUID.randomUUID().toString().replace("-", "").take(16)
-            val ha1 = hashHex(alg, "$user:$realm:$pass")
-            val ha2 = hashHex(alg, "DESCRIBE:$uri")
-            val resp = if (qop != null) hashHex(alg, "$ha1:$nonce:00000001:$cnonce:$qop:$ha2") else hashHex(alg, "$ha1:$nonce:$ha2")
-            buildString {
-                append("Digest username=\"$user\", realm=\"$realm\", nonce=\"$nonce\", uri=\"$uri\", response=\"$resp\"")
-                if (p["algorithm"] != null) append(", algorithm=$alg")
-                if (qop != null) append(", qop=$qop, nc=00000001, cnonce=\"$cnonce\"")
-                p["opaque"]?.let { append(", opaque=\"$it\"") }
-            }
-        }
-        val (c2, _) = rtspAsk(ip, uri, auth)
-        when (c2) {
-            200 -> Probe.Ok
-            401, 403 -> Probe.AuthFail("$scheme${if (alg.isNotEmpty()) ", $alg" else ""}, kod $c2")
-            else -> Probe.Err("kamera odpowiedziała kodem RTSP $c2")
-        }
-    } catch (e: Exception) {
-        Probe.Err(e.message ?: "brak połączenia na porcie 554")
     }
 }
 
@@ -347,9 +265,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     val saved = remember { Prefs.camCreds(ctx) }
-    val bad = remember { Prefs.camBad(ctx) }
-    // Odrzucone wcześniej dane nie są używane automatycznie.
-    var creds by remember { mutableStateOf(if (bad) null else saved) }
+    var creds by remember { mutableStateOf(saved) }
     var asking by remember { mutableStateOf(saved == null && d.activated) }
     var channel by remember { mutableStateOf(1) }
     var sub by remember { mutableStateOf(true) }
@@ -360,13 +276,13 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         mutableStateOf(
             when {
                 !d.activated -> "Kamera nie jest aktywowana — aktywuj ją najpierw w SADP na komputerze."
-                bad && saved != null -> "UWAGA: zapisane dane logowania zostały wcześniej oznaczone jako odrzucone, więc nie łączę się automatycznie. Jeśli są poprawne, użyj „Spróbuj z zapisanymi danymi”."
                 else -> ""
             }
         )
     }
     var user by remember { mutableStateOf(Prefs.camUser(ctx)) }
     var pass by remember { mutableStateOf("") }
+    var showPass by remember { mutableStateOf(false) }
 
     val vlc = remember { LibVLC(ctx.applicationContext, arrayListOf("--network-caching=300")) }
     val player = remember { MediaPlayer(vlc) }
@@ -377,8 +293,7 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                 MediaPlayer.Event.Playing -> { live = true; status = "" }
                 MediaPlayer.Event.EncounteredError -> {
                     live = false
-                    // Logowanie sprawdzone wcześniej, więc to nie hasło — raczej kodek, transport lub RTSP w kamerze.
-                    status = "Błąd odtwarzania. Spróbuj strumienia pomocniczego (H.264) albo przełącz transport TCP/UDP."
+                    status = "UWAGA: nie udało się odtworzyć obrazu — to może być błędny login/hasło, kodek lub transport. Nie ponawiam automatycznie. Sprawdź dane albo zmień strumień (pomocniczy H.264) lub TCP/UDP."
                 }
             }
         }
@@ -395,22 +310,9 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
         val c = creds ?: return@LaunchedEffect
         live = false
         status = "Łączenie…"
+        Prefs.setCamBad(ctx, false)
         player.stop()
         val path = "Streaming/Channels/$channel" + (if (sub) "02" else "01")
-        when (val pr = withContext(Dispatchers.IO) { rtspProbe(d.ip, path, c.first, c.second) }) {
-            is Probe.AuthFail -> {
-                // Jedna nieudana próba i koniec — bez ponawiania, żeby kamera nie zablokowała konta.
-                Prefs.setCamBad(ctx, true)
-                creds = null
-                status = "UWAGA: kamera odrzuciła login lub hasło (${pr.info}). Nie próbuję ponownie, żeby jej nie zablokować — wpisz poprawne dane."
-                return@LaunchedEffect
-            }
-            is Probe.Err -> {
-                status = "Nie udało się połączyć z kamerą: ${pr.msg}. Sprawdź, czy RTSP (port 554) jest włączone."
-                return@LaunchedEffect
-            }
-            Probe.Ok -> {}
-        }
         val media = Media(vlc, Uri.parse("rtsp://${d.ip}:554/$path"))
         // Login i hasło jako osobne opcje — znaki takie jak @ w haśle nie psują adresu.
         media.addOption(":rtsp-user=${c.first}")
@@ -508,10 +410,6 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (d.activated) OutlinedButton(onClick = { pass = ""; asking = true }) { Text("Dane logowania") }
                 if (creds != null) OutlinedButton(onClick = { attempt++ }) { Text("Połącz ponownie") }
-                if (creds == null && saved != null && d.activated) {
-                    // Jedna próba na wyraźne polecenie użytkownika; przy niepowodzeniu znacznik wraca.
-                    OutlinedButton(onClick = { Prefs.setCamBad(ctx, false); status = ""; creds = saved }) { Text("Spróbuj z zapisanymi danymi") }
-                }
             }
         }
     }
@@ -524,7 +422,11 @@ private fun CameraView(d: SadpDevice, onBack: () -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SubText("Dane zapiszą się (szyfrowane) w Ustawieniach użytkownika i będą używane domyślnie dla wszystkich kamer. Przy błędnych danych próba jest wykonywana jeden raz.")
                     LabeledField("Login:", user, { user = it })
-                    LabeledField("Hasło:", pass, { pass = it }, password = true)
+                    LabeledField("Hasło:", pass, { pass = it }, password = !showPass)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = showPass, onCheckedChange = { showPass = it })
+                        Text("Pokaż hasło", color = MaterialTheme.colorScheme.onSurface)
+                    }
                 }
             },
             confirmButton = {
@@ -549,6 +451,7 @@ fun CamSettingsScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     var user by remember { mutableStateOf(Prefs.camUser(ctx)) }
     var pass by remember { mutableStateOf("") }
+    var showPass by remember { mutableStateOf(false) }
     var status by remember {
         mutableStateOf(
             when {
@@ -565,7 +468,11 @@ fun CamSettingsScreen(onBack: () -> Unit) {
         ) {
             SubText("Domyślny login i hasło używane przy podglądzie kamer z SADP. Są szyfrowane w pamięci telefonu. Przy odrzuceniu danych przez kamerę aplikacja nie ponawia próby.")
             LabeledField("Login:", user, { user = it })
-            LabeledField("Hasło:", pass, { pass = it }, password = true)
+            LabeledField("Hasło:", pass, { pass = it }, password = !showPass)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = showPass, onCheckedChange = { showPass = it })
+                Text("Pokaż hasło", color = MaterialTheme.colorScheme.onSurface)
+            }
             Button(
                 onClick = {
                     if (user.isBlank()) { status = "Wpisz login."; return@Button }
