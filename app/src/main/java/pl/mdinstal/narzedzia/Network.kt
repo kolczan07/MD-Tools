@@ -103,13 +103,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 @Composable
 fun NetworkScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
-    val ctx = LocalContext.current
     AppScaffold("Sieć", onBack) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             NetTile("Speedtest", "Prędkość internetu (FIREPROBE)") { onOpen(Screen.Speedtest) }
             NetTile("Skaner WiFi", "Spektrum, kanały i siła sygnału") { onOpen(Screen.Wifi) }
             NetTile("Skaner LAN", "Wykrywanie urządzeń w sieci lokalnej") { onOpen(Screen.Lan) }
-            NetTile("Hotspot", "Ustawienia hotspotu i tetheringu telefonu (wbudowany serwer DHCP)") { openTetherSettings(ctx) }
+            NetTile("SADP Hikvision", "Lista kamer i rejestratorów w sieci, podgląd obrazu") { onOpen(Screen.Sadp) }
         }
     }
 }
@@ -785,21 +784,6 @@ private fun webUrl(h: LanHost): String? = when {
     8123 in h.ports -> "http://${h.ip}:8123"
     8443 in h.ports -> "https://${h.ip}:8443"
     else -> null
-}
-
-/** Otwiera systemowe ustawienia hotspotu/tetheringu; gdy producent ich nie udostępnia, ogólne ustawienia sieci. */
-private fun openTetherSettings(ctx: Context) {
-    val tries = listOf(
-        Intent().setClassName("com.android.settings", "com.android.settings.TetherSettings"),
-        Intent("android.settings.TETHER_SETTINGS"),
-        Intent(android.provider.Settings.ACTION_WIRELESS_SETTINGS)
-    )
-    for (i in tries) {
-        try {
-            ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            return
-        } catch (e: Exception) { }
-    }
 }
 
 private fun openUrl(ctx: Context, url: String) {

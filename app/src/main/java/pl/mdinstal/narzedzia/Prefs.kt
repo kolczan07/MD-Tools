@@ -106,6 +106,33 @@ object Prefs {
         secure(c)?.edit()?.remove("asaj_user")?.remove("asaj_pass")?.apply()
     }
 
+    // ---- Kamery (SADP): jedne domyślne dane logowania dla wszystkich kamer, szyfrowane ----
+    fun camCreds(c: Context): Pair<String, String>? {
+        val s = secure(c) ?: return null
+        val u = s.getString("cam_user", null) ?: return null
+        val p = s.getString("cam_pass", null) ?: return null
+        if (u.isEmpty() || p.isEmpty()) return null
+        return u to p
+    }
+
+    fun camUser(c: Context): String = secure(c)?.getString("cam_user", "admin") ?: "admin"
+
+    /** Zapis nowych danych kasuje znacznik odrzucenia. */
+    fun saveCamCreds(c: Context, user: String, pass: String): Boolean {
+        val s = secure(c) ?: return false
+        s.edit().putString("cam_user", user).putString("cam_pass", pass).putBoolean("cam_bad", false).apply()
+        return true
+    }
+
+    fun clearCamCreds(c: Context) {
+        secure(c)?.edit()?.remove("cam_user")?.remove("cam_pass")?.remove("cam_bad")?.apply()
+    }
+
+    /** Kamera odrzuciła zapisane dane — nie próbujemy ich więcej, dopóki użytkownik nie wpisze nowych. */
+    fun camBad(c: Context): Boolean = secure(c)?.getBoolean("cam_bad", false) ?: false
+
+    fun setCamBad(c: Context, v: Boolean) { secure(c)?.edit()?.putBoolean("cam_bad", v)?.apply() }
+
     // ---- Konto Google do kopii zapasowej na Drive ----
     /** Połączone konto Google (e-mail). Puste = kopia na Drive wyłączona. */
     fun googleAccount(c: Context): String = sp(c).getString("google_account", "") ?: ""

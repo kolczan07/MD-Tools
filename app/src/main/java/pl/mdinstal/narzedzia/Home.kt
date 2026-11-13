@@ -85,10 +85,6 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
         SectionTitle("Narzędzia")
         TileGrid(tools, onOpen, onOpenPumps)
 
-        Spacer(Modifier.height(12.dp))
-        SectionTitle("Dokumenty")
-        TileGrid(docs, onOpen, onOpenPumps)
-
         // Sekcja "Aplikacje" widoczna tylko wtedy, gdy w Ustawieniach → Skróty dodano jakąś aplikację.
         val ctx = LocalContext.current
         val apps = remember { Prefs.shortcuts(ctx).filter { ctx.packageManager.getLaunchIntentForPackage(it.pkg) != null } }
@@ -97,6 +93,10 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
             SectionTitle("Aplikacje")
             AppsGrid(apps)
         }
+
+        Spacer(Modifier.height(12.dp))
+        SectionTitle("Dokumenty")
+        TileGrid(docs, onOpen, onOpenPumps)
 
         Row(
             Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp).alpha(0.7f),

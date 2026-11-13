@@ -49,6 +49,10 @@ fun UserSettingsScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
                 if (Prefs.asajCreds(ctx) != null) "Login i hasło zapisane" else "Login i hasło do asaj.pl (konto firmowe)"
             ) { onOpen(Screen.AsajSettings) }
             SettingsNavCard(
+                "Kamery Hikvision",
+                if (Prefs.camCreds(ctx) != null) "Login i hasło zapisane" else "Domyślny login i hasło do kamer (SADP)"
+            ) { onOpen(Screen.CamSettings) }
+            SettingsNavCard(
                 "Google",
                 if (Prefs.driveLinked(ctx)) "Kopia na Drive: " + Prefs.googleAccount(ctx) else "Kopia przypisań kontrahentów na Google Drive"
             ) { onOpen(Screen.GoogleSettings) }
