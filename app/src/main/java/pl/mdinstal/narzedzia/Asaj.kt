@@ -287,7 +287,15 @@ private const val MIN_FV_GROSS = 1000.0
 private const val WZ_WARN_GROSS = 14_000.0
 
 /** Suma WZ do zapłaty: te, które na liście (od najnowszych) leżą nad ostatnią liczoną FS. Niżej są już rozliczone. */
-private class WzSum(val fvNumber: String, val fvDate: String, val count: Int, val gross: Double, val net: Double)
+private class WzSum(
+    val fvNumber: String,
+    val fvDate: String,
+    val count: Int,
+    val gross: Double,
+    val net: Double,
+    /** true, gdy punktem odniesienia jest FS przypisana do kontrahenta (a nie ostatnia FS w ogóle). */
+    val ownFv: Boolean = false
+)
 
 private fun parseAmount(s: String): Double =
     s.replace(Regex("[^0-9,\\-]"), "").replace(',', '.').toDoubleOrNull() ?: 0.0
@@ -313,6 +321,32 @@ private fun sumSinceLastFv(docs: List<AsajDoc>): WzSum? {
     val fv = docs[idx]
     val wz = docs.subList(0, idx).filter { it.type.equals("WZ", ignoreCase = true) }
     return WzSum(fv.number, fv.date, wz.size, wz.sumOf { parseAmount(it.gross) }, wz.sumOf { parseAmount(it.net) })
+}
+
+/**
+ * Kontrahent wybrany filtrem: wpisany tekst pasuje do dokładnie jednej (unikalnej) nazwy przypisanej do dokumentów.
+ * Przy dwóch różnych pasujących nazwach nie zgadujemy i zostaje suma ogólna.
+ */
+private fun contractorFromQuery(query: String, assigns: Map<String, String>): String? {
+    val q = query.trim()
+    if (q.isEmpty()) return null
+    val names = assigns.values.distinctBy { it.lowercase() }
+    names.firstOrNull { it.equals(q, ignoreCase = true) }?.let { return it }
+    return names.filter { it.contains(q, ignoreCase = true) }.singleOrNull()
+}
+
+/**
+ * Suma WZ danego kontrahenta od ostatniej FS. Punktem odniesienia jest ostatnia liczona FS przypisana do tego
+ * kontrahenta; gdy żadnej nie ma, ostatnia liczona FS w ogóle (jak w sumie ogólnej).
+ */
+private fun sumForContractor(docs: List<AsajDoc>, assigns: Map<String, String>, name: String): WzSum? {
+    fun mine(d: AsajDoc) = assigns[d.number]?.equals(name, ignoreCase = true) == true
+    val own = docs.indexOfFirst { isCountedFv(it) && mine(it) }
+    val idx = if (own >= 0) own else docs.indexOfFirst { isCountedFv(it) }
+    if (idx < 0) return null
+    val fv = docs[idx]
+    val wz = docs.subList(0, idx).filter { it.type.equals("WZ", ignoreCase = true) && mine(it) }
+    return WzSum(fv.number, fv.date, wz.size, wz.sumOf { parseAmount(it.gross) }, wz.sumOf { parseAmount(it.net) }, own >= 0)
 }
 
 /** Statystyki WZ z jednego miesiąca kalendarzowego (month w formacie rrrr-MM). */
@@ -882,17 +916,21 @@ private fun AsajBody(
                                 if (limit.term.isNotBlank()) " · Termin: ${limit.term}" else ""
                         )
                     }
-                    val sum = remember(docs) { sumSinceLastFv(docs) }
+                    val who = remember(query, assigns) { contractorFromQuery(query, assigns) }
+                    val sum = remember(docs, assigns, who) {
+                        if (who != null) sumForContractor(docs, assigns, who) else sumSinceLastFv(docs)
+                    }
                     if (sum != null) {
                         Text(
-                            "WZ do zapłaty: " + fmtAmount(sum.gross) + " brutto",
+                            (if (who != null) "WZ do zapłaty · $who: " else "WZ do zapłaty: ") + fmtAmount(sum.gross) + " brutto",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(top = 6.dp)
                         )
                         SubText(
-                            fmtAmount(sum.net) + " netto · " + sum.count + " WZ nad ostatnią FS " + sum.fvNumber +
+                            fmtAmount(sum.net) + " netto · " + sum.count + " WZ nad " +
+                                (if (sum.ownFv) "ostatnią FS kontrahenta " else "ostatnią FS ") + sum.fvNumber +
                                 " z " + sum.fvDate
                         )
                     } else if (docs.isNotEmpty()) {
