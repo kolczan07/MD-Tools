@@ -102,6 +102,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -414,10 +415,84 @@ private fun postWzNotification(ctx: Context, gross: Double) {
 
 private fun asajDir(ctx: Context): File = File(ctx.cacheDir, "pdf/asaj").apply { mkdirs() }
 
+/** Usuwa wszystko, co Asaj trzyma w pamięci podręcznej: PDF-y i listę dokumentów. */
 private fun clearAsajCache(ctx: Context) {
     try {
         asajDir(ctx).listFiles()?.forEach { it.delete() }
+        AsajDocCache.clear(ctx)
     } catch (e: Exception) {
+    }
+}
+
+/** PDF-y są niezmienne, więc zostają w pamięci podręcznej; trzymamy najnowsze (max 100 plików / 100 MB). */
+private fun trimAsajPdfs(ctx: Context) {
+    try {
+        val files = asajDir(ctx).listFiles()?.sortedByDescending { it.lastModified() } ?: return
+        var total = 0L
+        files.forEachIndexed { i, f ->
+            total += f.length()
+            if (i >= 100 || total > 100L * 1024 * 1024) f.delete()
+        }
+    } catch (e: Exception) {
+    }
+}
+
+private fun cachedPdf(ctx: Context, d: AsajDoc): File? {
+    val f = File(asajDir(ctx), d.fileName)
+    if (!f.exists() || f.length() == 0L) return null
+    f.setLastModified(System.currentTimeMillis())
+    return f
+}
+
+/** Zapis przez plik tymczasowy, żeby przerwane pobieranie nie zostawiło uciętego PDF-a w pamięci podręcznej. */
+private fun cachePdf(ctx: Context, d: AsajDoc, bytes: ByteArray): File {
+    val f = File(asajDir(ctx), d.fileName)
+    val tmp = File(f.path + ".tmp")
+    tmp.writeBytes(bytes)
+    if (!tmp.renameTo(f)) {
+        f.writeBytes(bytes)
+        tmp.delete()
+    }
+    trimAsajPdfs(ctx)
+    return f
+}
+
+/** Lista dokumentów (WZ i FS) zapamiętana między wejściami: po wejściu pobieramy tylko nowe wiersze. */
+private object AsajDocCache {
+    private fun file(ctx: Context) = File(ctx.cacheDir, "asaj_docs.json")
+
+    fun save(ctx: Context, docs: List<AsajDoc>, more: Boolean) {
+        try {
+            val arr = JSONArray()
+            docs.forEach {
+                arr.put(
+                    JSONObject().put("t", it.type).put("n", it.number).put("d", it.date)
+                        .put("g", it.gross).put("net", it.net).put("p", it.pdfUrl)
+                )
+            }
+            file(ctx).writeText(JSONObject().put("more", more).put("docs", arr).toString())
+        } catch (e: Exception) {
+        }
+    }
+
+    fun load(ctx: Context): Pair<List<AsajDoc>, Boolean>? = try {
+        val f = file(ctx)
+        if (!f.exists()) null else {
+            val o = JSONObject(f.readText())
+            val a = o.getJSONArray("docs")
+            val list = ArrayList<AsajDoc>()
+            for (i in 0 until a.length()) {
+                val r = a.getJSONObject(i)
+                list.add(AsajDoc(r.optString("t"), r.optString("n"), r.optString("d"), r.optString("g"), r.optString("p"), r.optString("net")))
+            }
+            if (list.isEmpty()) null else list to o.optBoolean("more", false)
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    fun clear(ctx: Context) {
+        file(ctx).delete()
     }
 }
 
@@ -542,22 +617,46 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 status = "Logowanie…"
                 session.login(c.first, c.second)
                 status = "Pobieranie dokumentów…"
-                val first = session.docs(1)
-                var all = first.first
-                var p = 1
-                var more = first.second
-                // Lista nie jest filtrowana na serwerze, więc dociągamy strony, aż będzie dość wybranych dokumentów.
-                // Dociągamy też do pierwszej FV (od 1000 zł) i do początku bieżącego miesiąca: od nich liczymy sumy WZ.
+                fun key(d: AsajDoc) = d.pdfUrl + "|" + d.number
+                val cached = docs
+                val known = HashSet<String>()
+                cached.forEach { known.add(key(it)) }
+                // Starsze strony dociągamy tylko, gdy zapamiętanej listy brakuje do filtrów i sum:
+                // min. 15 wybranych dokumentów, pierwsza FV (od 1000 zł) i początek bieżącego miesiąca.
                 val month = currentMonth()
-                while (more && p < 8 && (all.count { sel(it) } < 15 || all.none { isCountedFv(it) } || !coversMonth(all, month))) {
-                    val n = session.docs(p + 1)
-                    all = all + n.first
-                    p += 1
+                fun needMore(list: List<AsajDoc>) =
+                    list.count { sel(it) } < 15 || list.none { isCountedFv(it) } || !coversMonth(list, month)
+
+                // 1) Tylko nowe dokumenty: od strony 1, aż trafimy na stronę, na której nic nowego nie ma.
+                val fresh = ArrayList<AsajDoc>()
+                var more = hasMore
+                var p = 1
+                while (p <= 8) {
+                    val n = session.docs(p)
+                    val add = n.first.filter { known.add(key(it)) }
+                    fresh.addAll(add)
+                    if (cached.isEmpty()) more = n.second
+                    if (!n.second) { more = false; break }
+                    if (add.size < n.first.size) break // doszliśmy do znanych już dokumentów
+                    if (cached.isEmpty() && !needMore(fresh)) break
+                    p++
+                }
+                var all: List<AsajDoc> = fresh + cached
+
+                // 2) Jeśli zapamiętanej listy jest za mało na sumy i filtry, dociągamy starsze strony.
+                var next = all.size / 15 + 1
+                var guard = 0
+                while (more && guard < 8 && needMore(all)) {
+                    val n = session.docs(next)
+                    all = all + n.first.filter { known.add(key(it)) }
                     more = n.second
+                    next++
+                    guard++
                 }
                 docs = all
-                page = p
+                page = all.size / 15
                 hasMore = more
+                withContext(Dispatchers.IO) { AsajDocCache.save(ctx, all, more) }
                 status = "Pobieranie limitu…"
                 limit = try {
                     session.limitInfo()
@@ -599,6 +698,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 docs = all
                 page = p
                 hasMore = more
+                withContext(Dispatchers.IO) { AsajDocCache.save(ctx, all, more) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -616,9 +716,11 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
             opening = d.number
             error = null
             try {
-                val bytes = session.pdf(d.pdfUrl, c.first, c.second)
-                val f = File(asajDir(ctx), d.fileName)
-                withContext(Dispatchers.IO) { f.writeBytes(bytes) }
+                val hit = withContext(Dispatchers.IO) { cachedPdf(ctx, d) }
+                val f = hit ?: run {
+                    val bytes = session.pdf(d.pdfUrl, c.first, c.second)
+                    withContext(Dispatchers.IO) { cachePdf(ctx, d, bytes) }
+                }
                 viewing = d to f
             } catch (e: CancellationException) {
                 throw e
@@ -637,7 +739,10 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
         opening = d.number
         error = null
         return try {
-            session.pdf(d.pdfUrl, c.first, c.second)
+            val hit = withContext(Dispatchers.IO) { cachedPdf(ctx, d)?.readBytes() }
+            hit ?: session.pdf(d.pdfUrl, c.first, c.second).also { b ->
+                withContext(Dispatchers.IO) { cachePdf(ctx, d, b) }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -674,8 +779,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
         scope.launch {
             val b = fetchBytes(d) ?: return@launch
             try {
-                val f = File(asajDir(ctx), d.fileName)
-                withContext(Dispatchers.IO) { f.writeBytes(b) }
+                val f = withContext(Dispatchers.IO) { cachedPdf(ctx, d) ?: cachePdf(ctx, d, b) }
                 sharePdf(ctx, f)
             } catch (e: CancellationException) {
                 throw e
@@ -692,7 +796,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        clearAsajCache(ctx)
+        withContext(Dispatchers.IO) { trimAsajPdfs(ctx) }
         unlock()
     }
     // Kopia z Drive: po odblokowaniu dociągamy przypisania z drugiego telefonu (jeśli konto Google połączone).
@@ -700,7 +804,17 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
         if (unlocked && DriveBackup.syncQuiet(ctx)) assigns = ContractorStore.active(ctx)
     }
     LaunchedEffect(unlocked) {
-        if (unlocked && hasCreds) reload()
+        if (unlocked && hasCreds) {
+            // Najpierw zapamiętana lista (od razu na ekranie), potem dociągamy tylko nowe dokumenty.
+            val cached = withContext(Dispatchers.IO) { AsajDocCache.load(ctx) }
+            if (cached != null && docs.isEmpty()) {
+                busy = true // monit o WZ ma czekać na świeże dane, nie na zapamiętane
+                docs = cached.first
+                hasMore = cached.second
+                page = cached.first.size / 15
+            }
+            reload()
+        }
     }
     // Zmiana wyboru WZ/FV: jeśli na wczytanych stronach jest mało takich dokumentów, dociągamy starsze.
     LaunchedEffect(showWz, showFv) {
@@ -721,11 +835,9 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
     DisposableEffect(Unit) {
         onDispose {
             web.stopLoading()
-            clearAsajCache(ctx)
         }
     }
     BackHandler(enabled = viewing != null) {
-        viewing?.second?.delete()
         viewing = null
     }
 
@@ -735,7 +847,6 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
         val v = viewing
         if (v != null) {
             PdfViewerScreen(v.first, v.second, onClose = {
-                v.second.delete()
                 viewing = null
             })
         } else {
@@ -1313,6 +1424,7 @@ fun AsajSettingsScreen(onBack: () -> Unit) {
             confirmButton = {
                 TextButton(onClick = {
                     Prefs.clearAsajCreds(ctx)
+                    clearAsajCache(ctx)
                     user = ""
                     pass = ""
                     status = "Wyczyszczono"
