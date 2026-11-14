@@ -18,6 +18,8 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
@@ -30,16 +32,57 @@ fun canNotifyMail(ctx: Context): Boolean =
         ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
 object MailNotify {
-    /** Sprawdzanie skrzynki co ok. 15 minut (najkrótszy okres WorkManagera; system może opóźnić w trybie oszczędzania). */
+    /** Sprawdzanie skrzynki co ok. 15 minut (najkrótszy okres WorkManagera) + sprawdzanie przy włączeniu ekranu ([MailFast]). */
     fun schedule(ctx: Context) {
         val req = PeriodicWorkRequestBuilder<MailWorker>(15, TimeUnit.MINUTES)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         WorkManager.getInstance(ctx).enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.KEEP, req)
+        MailFast.ensure(ctx)
     }
 
     fun cancel(ctx: Context) {
         WorkManager.getInstance(ctx).cancelUniqueWork(WORK_NAME)
+        MailFast.stop(ctx)
+    }
+
+    private val checkLock = Mutex()
+
+    /** Jedno sprawdzenie skrzynki; wywoływane przez WorkManagera i przez usługę szybkiego sprawdzania. */
+    suspend fun checkOnce(c: Context): Unit = checkLock.withLock {
+        if (!Prefs.mailNotify(c)) return@withLock
+        val account = Prefs.mailAccount(c)
+        if (account.isBlank()) return@withLock
+        try {
+            val auth = GmailApi.authorize(c, account)
+            // Bez zgody w tle nie da się nic zrobić — czekamy aż użytkownik wejdzie w Pocztę.
+            if (auth !is DriveAuth.Token) return@withLock
+            val token = auth.token
+            val last = Prefs.mailHistoryId(c)
+            if (last.isEmpty()) {
+                Prefs.setMailHistoryId(c, GmailApi.profileHistoryId(token))
+                return@withLock
+            }
+            val found = try {
+                GmailApi.newInboxMessages(token, last)
+            } catch (e: java.io.IOException) {
+                if (e.message?.contains("HTTP 404") == true) {
+                    // Zbyt stary punkt odniesienia — zaczynamy od nowa, bez powiadamiania o zaległościach.
+                    Prefs.setMailHistoryId(c, GmailApi.profileHistoryId(token))
+                    return@withLock
+                }
+                throw e
+            }
+            Prefs.setMailHistoryId(c, found.second)
+            val mine = account.lowercase()
+            val ids = found.first.distinct()
+            if (ids.isEmpty()) return@withLock
+            val rows = ids.take(5).mapNotNull { id ->
+                try { GmailApi.messageRow(token, id) } catch (e: Exception) { null }
+            }.filter { !it.fromEmail.equals(mine, ignoreCase = true) }
+            if (rows.isNotEmpty()) post(c, rows.map { it.row }, maxOf(0, ids.size - rows.size))
+        } catch (e: Exception) {
+        }
     }
 
     fun post(ctx: Context, items: List<MailRow>, more: Int) {
@@ -95,40 +138,9 @@ object MailNotify {
 class MailWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val c = applicationContext
-        if (!Prefs.mailNotify(c)) return@withContext Result.success()
-        val account = Prefs.mailAccount(c)
-        if (account.isBlank()) return@withContext Result.success()
-        try {
-            val auth = GmailApi.authorize(c, account)
-            // Bez zgody w tle nie da się nic zrobić — czekamy aż użytkownik wejdzie w Pocztę.
-            if (auth !is DriveAuth.Token) return@withContext Result.success()
-            val token = auth.token
-            val last = Prefs.mailHistoryId(c)
-            if (last.isEmpty()) {
-                Prefs.setMailHistoryId(c, GmailApi.profileHistoryId(token))
-                return@withContext Result.success()
-            }
-            val found = try {
-                GmailApi.newInboxMessages(token, last)
-            } catch (e: java.io.IOException) {
-                if (e.message?.contains("HTTP 404") == true) {
-                    // Zbyt stary punkt odniesienia — zaczynamy od nowa, bez powiadamiania o zaległościach.
-                    Prefs.setMailHistoryId(c, GmailApi.profileHistoryId(token))
-                    return@withContext Result.success()
-                }
-                throw e
-            }
-            Prefs.setMailHistoryId(c, found.second)
-            val mine = account.lowercase()
-            val ids = found.first.distinct()
-            if (ids.isEmpty()) return@withContext Result.success()
-            val rows = ids.take(5).mapNotNull { id ->
-                try { GmailApi.messageRow(token, id) } catch (e: Exception) { null }
-            }.filter { !it.fromEmail.equals(mine, ignoreCase = true) }
-            if (rows.isNotEmpty()) MailNotify.post(c, rows.map { it.row }, maxOf(0, ids.size - rows.size))
-            Result.success()
-        } catch (e: Exception) {
-            Result.success()
-        }
+        MailNotify.checkOnce(c)
+        // Przy okazji spróbuj podnieść usługę, jeśli system ją ubił.
+        MailFast.ensure(c)
+        Result.success()
     }
 }

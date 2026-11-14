@@ -160,6 +160,10 @@ object Prefs {
     fun mailNotify(c: Context): Boolean = sp(c).getBoolean("mail_notify", false)
     fun setMailNotify(c: Context, v: Boolean) { sp(c).edit().putBoolean("mail_notify", v).apply() }
 
+    /** Szybkie sprawdzanie poczty (usługa pierwszoplanowa, 8–17). Domyślnie włączone. */
+    fun mailFast(c: Context): Boolean = sp(c).getBoolean("mail_fast", true)
+    fun setMailFast(c: Context, v: Boolean) { sp(c).edit().putBoolean("mail_fast", v).apply() }
+
     fun mailHistoryId(c: Context): String = sp(c).getString("mail_history_id", "") ?: ""
     fun setMailHistoryId(c: Context, v: String) { sp(c).edit().putString("mail_history_id", v).apply() }
 

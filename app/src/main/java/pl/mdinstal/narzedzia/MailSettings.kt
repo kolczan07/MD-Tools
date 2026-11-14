@@ -40,6 +40,7 @@ fun MailSettingsScreen(onBack: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     var sig by remember { mutableStateOf(Prefs.mailSignature(ctx)) }
     var notify by remember { mutableStateOf(Prefs.mailNotify(ctx)) }
+    var fast by remember { mutableStateOf(Prefs.mailFast(ctx)) }
     var status by remember { mutableStateOf("") }
     val trusted = remember { mutableStateListOf<String>().apply { addAll(Prefs.trustedSenders(ctx)) } }
 
@@ -48,7 +49,7 @@ fun MailSettingsScreen(onBack: () -> Unit) {
         Prefs.setMailHistoryId(ctx, "") // pierwszy przebieg ustawia punkt odniesienia, bez powiadamiania o starych mailach
         MailNotify.schedule(ctx)
         notify = true
-        status = "Włączone. Sprawdzam skrzynkę co ok. 15 minut."
+        status = if (Prefs.mailFast(ctx)) "Włączone. Sprawdzam przy włączeniu ekranu i co ok. 15 minut." else "Włączone. Sprawdzam skrzynkę co ok. 15 minut."
     }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
@@ -87,6 +88,31 @@ fun MailSettingsScreen(onBack: () -> Unit) {
                             }
                         }
                     )
+                }
+            }
+
+            if (notify) {
+                AppCard(Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Sprawdzaj przy włączeniu ekranu", fontWeight = FontWeight.Bold, color = cs.onSurface)
+                            SubText("Po każdym wybudzeniu telefonu (najwyżej raz na minutę) aplikacja od razu sprawdza pocztę. Prawie nie zużywa baterii, ale wymaga stałego, cichego powiadomienia usługi.")
+                        }
+                        Switch(
+                            checked = fast,
+                            onCheckedChange = { on ->
+                                Prefs.setMailFast(ctx, on)
+                                fast = on
+                                if (on) {
+                                    MailFast.ensure(ctx)
+                                    status = "Włączone. Poczta jest sprawdzana przy każdym włączeniu ekranu."
+                                } else {
+                                    MailFast.stop(ctx)
+                                    status = "Wyłączone. Poczta sprawdzana co ok. 15 minut."
+                                }
+                            }
+                        )
+                    }
                 }
             }
 

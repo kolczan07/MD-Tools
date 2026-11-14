@@ -46,6 +46,12 @@ class MainActivity : FragmentActivity() {
         if (intent.getBooleanExtra(EXTRA_OPEN_MAIL, false)) openMail = true
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Przy każdym wejściu do aplikacji: upewnij się, że usługa działa, i od razu sprawdź pocztę (z limitem raz na minutę).
+        if (Prefs.mailNotify(this)) MailFast.ensure(this)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.KITKAT) {
