@@ -2,6 +2,7 @@
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_mail_desc"
     android:initialLayout="@layout/widget_mail"
+    android:previewLayout="@layout/widget_mail_preview"
     android:minWidth="110dp"
     android:minHeight="110dp"
     android:resizeMode="none"

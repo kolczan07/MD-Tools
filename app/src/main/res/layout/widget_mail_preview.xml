@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/m_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Poczta"
+        android:textColor="@color/widget_text2"
+        android:textSize="11sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/m_count"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="5"
+            android:textColor="@color/widget_accent"
+            android:textSize="36sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="✉️"
+            android:textSize="30sp" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/m_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="nieprzeczytane"
+        android:textColor="@color/widget_text"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/m_time"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Zaktualizowano 17:30"
+        android:maxLines="1"
+        android:textColor="@color/widget_text2"
+        android:textSize="12sp" />
+</LinearLayout>

@@ -2,6 +2,7 @@
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_shortcuts_desc"
     android:initialLayout="@layout/widget_shortcuts"
+    android:previewLayout="@layout/widget_shortcuts"
     android:minWidth="250dp"
     android:minHeight="55dp"
     android:resizeMode="none"

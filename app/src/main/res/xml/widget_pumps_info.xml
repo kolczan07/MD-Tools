@@ -2,6 +2,7 @@
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_pumps_desc"
     android:initialLayout="@layout/widget_pumps"
+    android:previewLayout="@layout/widget_pumps_preview"
     android:minWidth="250dp"
     android:minHeight="110dp"
     android:resizeMode="none"

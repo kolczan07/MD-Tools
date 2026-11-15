@@ -161,6 +161,24 @@ private fun weekday(date: String): String {
     }
 }
 
+/** Nazwa miejscowości dla współrzędnych: Geocoder systemu, a gdy go brak, darmowy reverse geocoding BigDataCloud. */
+@Suppress("DEPRECATION")
+internal suspend fun placeName(ctx: Context, lat: Double, lon: Double): String? = withContext(Dispatchers.IO) {
+    try {
+        if (android.location.Geocoder.isPresent()) {
+            val a = android.location.Geocoder(ctx, Locale("pl", "PL")).getFromLocation(lat, lon, 1)?.firstOrNull()
+            val n = a?.locality ?: a?.subAdminArea ?: a?.adminArea
+            if (!n.isNullOrBlank()) return@withContext n
+        }
+    } catch (e: Exception) { }
+    try {
+        val o = JSONObject(Http.get("https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=$lat&longitude=$lon&localityLanguage=pl"))
+        o.optString("city").ifBlank { o.optString("locality") }.ifBlank { null }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 @SuppressLint("MissingPermission")
 private suspend fun currentLocation(ctx: Context): Location? {
     val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -222,7 +240,7 @@ fun WeatherScreen(onBack: () -> Unit) {
         scope.launch {
             status = "Ładowanie…"
             val loc = currentLocation(ctx)
-            if (loc != null) fetch(loc.latitude, loc.longitude, null)
+            if (loc != null) fetch(loc.latitude, loc.longitude, placeName(ctx, loc.latitude, loc.longitude))
             else {
                 status = "Brak dostępu do lokalizacji."
                 manual = true

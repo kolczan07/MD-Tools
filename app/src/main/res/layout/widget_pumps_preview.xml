@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/p_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/widget_bg"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Pompy ciepła"
+        android:textColor="@color/widget_text2"
+        android:textSize="11sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView
+                android:id="@+id/p_total"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="49"
+                android:textColor="@color/widget_text"
+                android:textSize="30sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="pomp"
+                android:textColor="@color/widget_text2"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView
+                android:id="@+id/p_online"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="41"
+                android:textColor="@color/widget_green"
+                android:textSize="30sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="online"
+                android:textColor="@color/widget_text2"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView
+                android:id="@+id/p_offline"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="8"
+                android:textColor="@color/widget_text"
+                android:textSize="30sp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="offline"
+                android:textColor="@color/widget_text2"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView
+                android:id="@+id/p_alarm"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="1"
+                android:textColor="@color/widget_red"
+                android:textSize="30sp" />
+            <TextView
+                android:id="@+id/p_alarm_label"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="alarmy"
+                android:textColor="@color/widget_text2"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/p_line"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="● 210915010 · ostrzeżenie"
+        android:maxLines="1"
+        android:textColor="@color/widget_amber"
+        android:textSize="12sp" />
+</LinearLayout>
