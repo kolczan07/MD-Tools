@@ -48,7 +48,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 internal val OnlineGreen = Color(0xFF16A34A)
 
@@ -79,6 +81,20 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
             diag = PumpStore.diag(ctx)
             now = System.currentTimeMillis()
             delay(2000)
+        }
+    }
+
+    // Flagi alarmów odświeżamy z API co 2 min, o ile jest ważny token z sesji portalu (bez wchodzenia w portal).
+    LaunchedEffect(Unit) {
+        while (true) {
+            val token = IgluToken.token
+            if (token != null && IgluToken.valid()) {
+                try {
+                    val json = withContext(Dispatchers.IO) { IgluApi.fetchPumps(token) }
+                    PumpStore.merge(ctx, json)
+                } catch (e: Exception) { }
+            }
+            delay(120_000)
         }
     }
 

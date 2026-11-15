@@ -110,7 +110,9 @@ private class Param(
     val groupOrder: Int,
     val order: Int,
     /** Dla pól typu lista: wartość -> opis (np. "true" -> "Curve2"). */
-    val range: Map<String, String>
+    val range: Map<String, String>,
+    /** Cały opis parametru z API (tekst JSON), do dopasowania po etykiecie, np. "Reset alarms". */
+    val raw: String = ""
 )
 
 private class Detail(
@@ -169,7 +171,8 @@ private fun loadDetail(p: Pump, token: String): Detail {
                 group = g?.s("name") ?: "Inne",
                 groupOrder = g?.optInt("sortOrder", 999) ?: 999,
                 order = o.optInt("sortOrder"),
-                range = range
+                range = range,
+                raw = o.toString()
             )
         )
     }
@@ -430,6 +433,7 @@ private fun LiveStreamView(
  */
 @Composable
 fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
+    val ctxForFlags = LocalContext.current
     var tokenOk by remember { mutableStateOf(IgluToken.valid()) }
     var tokenFailed by remember { mutableStateOf(false) }
     var detail by remember { mutableStateOf<Detail?>(null) }
@@ -487,6 +491,7 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
         error = null
         try {
             detail = withContext(Dispatchers.IO) { loadDetail(pump, token) }
+            detail?.let { PumpStore.setFlags(ctxForFlags, pump.serial, it.alarm, it.warning) }
         } catch (e: Exception) {
             error = e.message ?: "Nieznany błąd"
             if (e.message?.contains("401") == true) {
@@ -1273,9 +1278,21 @@ private fun FieldRow(p: Param, cur: Any?, des: Any?, editable: Boolean, locked: 
 private val FAULT_KEY = Regex("alarm|error|fault|err|warn|usterk|blad|błąd", RegexOption.IGNORE_CASE)
 private val RESET_KEY = Regex("reset|kasuj|clear|ack", RegexOption.IGNORE_CASE)
 
+/** Opis wartości błędu: lista (każdy element z opisem z listy wartości), liczba/tekst z opisem, a gdy go brak, surowa wartość. */
+private fun faultText(v: Any?, p: Param): String {
+    if (v is org.json.JSONArray) {
+        return (0 until v.length()).joinToString(", ") { i ->
+            val e = v.opt(i)?.toString().orEmpty()
+            p.range[e]?.trim() ?: e
+        }
+    }
+    return valueText(v, p)
+}
+
 /** Czy wartość parametru oznacza aktywny błąd: prawda, liczba różna od zera albo niepusty tekst. */
 private fun faultActive(v: Any?): Boolean = when (v) {
     null -> false
+    is org.json.JSONArray -> v.length() > 0
     is Boolean -> v
     is Number -> v.toDouble() != 0.0
     else -> v.toString().isNotBlank() && v.toString() != "0" && !v.toString().equals("false", true)
@@ -1291,12 +1308,20 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
     val red = Color(0xFFDC2626)
     val amber = Color(0xFFF59E0B)
     val color = if (d.alarm) red else amber
+    // Opis: parametry z grupy alarmów (np. "Active alarms") albo o nazwie wskazującej na błąd, o aktywnej wartości.
+    // Same flagi Alarm/Warning pomijamy, bo to już wiemy z nagłówka karty.
     val lines = d.params
-        .filter { FAULT_KEY.containsMatchIn(it.keyword) && !RESET_KEY.containsMatchIn(it.keyword) && faultActive(current[it.keyword]) }
+        .filter {
+            !RESET_KEY.containsMatchIn(it.keyword) &&
+                !it.keyword.equals("Alarm", true) && !it.keyword.equals("Warning", true) &&
+                (FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true)) &&
+                faultActive(current[it.keyword])
+        }
         .sortedBy { it.order }
-        .map { it.keyword to valueText(current[it.keyword], it) }
+        .map { it.keyword to faultText(current[it.keyword], it) }
+    // Reset: zapisywalny parametr, którego nazwa albo etykieta to "reset alarms" (w dowolnej kolejności).
     val resetParam = d.params.firstOrNull {
-        RESET_KEY.containsMatchIn(it.keyword) && FAULT_KEY.containsMatchIn(it.keyword) && canEdit(it)
+        canEdit(it) && Regex("reset\\W*(alarm|alm|err|fault|warn)|(alarm|alm|err|fault|warn)\\w*\\W*reset", RegexOption.IGNORE_CASE).containsMatchIn(it.raw)
     }
     var confirm by remember { mutableStateOf(false) }
 
@@ -1319,7 +1344,7 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
                 lines.forEach { (k, v) ->
                     Column {
                         Text(v, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                        SubText(k)
+                        SubText(k + " = " + (current[k]?.toString() ?: ""))
                     }
                 }
             }

@@ -100,6 +100,14 @@ object PumpStore {
         return n
     }
 
+    /** Aktualizuje flagi alarm/ostrzeżenie jednej pompy (np. po otwarciu jej szczegółów). */
+    fun setFlags(ctx: Context, serial: String, alarm: Boolean, warning: Boolean) {
+        val all = load(ctx)
+        val cur = all.firstOrNull { it.serial == serial } ?: return
+        if (cur.alarm == alarm && cur.warning == warning) return
+        write(ctx, all.map { if (it.serial == serial) it.copy(alarm = alarm, warning = warning) else it }, updatedAt(ctx))
+    }
+
     private fun write(ctx: Context, list: Collection<Pump>, now: Long) {
         val a = JSONArray()
         list.forEach {
