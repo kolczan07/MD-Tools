@@ -52,11 +52,9 @@ object Updater {
      * debug = false: zwykły plik (bez "debug" w nazwie); gdy takiego nie ma, pierwszy APK.
      */
     private fun pick(debug: Boolean): UpdateInfo? {
-        // Debug: stałe wydanie z tagiem "debug" (workflow nadpisuje je przy każdym buildzie debug).
+        if (debug) return pickDebug()
         // Zwykłe: najnowsze wydanie (GitHub pomija w "latest" wydania oznaczone jako pre-release).
-        val url = if (debug) "https://api.github.com/repos/$REPO/releases/tags/debug"
-        else "https://api.github.com/repos/$REPO/releases/latest"
-        val json = JSONObject(Http.get(url))
+        val json = JSONObject(Http.get("https://api.github.com/repos/$REPO/releases/latest"))
         val tag = json.optString("tag_name").removePrefix("v").removePrefix("V")
         val assets = json.optJSONArray("assets") ?: return null
         var fallback: UpdateInfo? = null
@@ -65,15 +63,43 @@ object Updater {
             val name = a.optString("name")
             if (!name.endsWith(".apk", ignoreCase = true)) continue
             val info = UpdateInfo(tag, a.getString("browser_download_url"), cleanNotes(json.optString("body")), a.optLong("size"))
-            val isDebug = name.contains("debug", ignoreCase = true)
-            if (debug) {
-                if (isDebug) return info
-            } else {
-                if (!isDebug) return info
-                if (fallback == null) fallback = info
-            }
+            if (!name.contains("debug", ignoreCase = true)) return info
+            if (fallback == null) fallback = info
         }
-        return if (debug) null else fallback
+        return fallback
+    }
+
+    /** Z listy plików wydania wybiera archiwum ZIP (z APK w środku) albo bezpośrednio APK z "debug" w nazwie. */
+    private fun debugAsset(json: JSONObject): UpdateInfo? {
+        val tag = json.optString("tag_name").removePrefix("v").removePrefix("V")
+        val assets = json.optJSONArray("assets") ?: return null
+        var apk: UpdateInfo? = null
+        for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            val name = a.optString("name")
+            val info = UpdateInfo(tag, a.getString("browser_download_url"), cleanNotes(json.optString("body")), a.optLong("size"))
+            if (name.endsWith(".zip", ignoreCase = true)) return info
+            if (name.endsWith(".apk", ignoreCase = true) && name.contains("debug", ignoreCase = true) && apk == null) apk = info
+        }
+        return apk
+    }
+
+    /**
+     * Debug: stałe wydanie z tagiem "debug" (workflow nadpisuje je przy każdym buildzie debug);
+     * gdy go brak, najnowsze z ostatnich wydań (także pre-release), które ma archiwum ZIP.
+     */
+    private fun pickDebug(): UpdateInfo? {
+        try {
+            debugAsset(JSONObject(Http.get("https://api.github.com/repos/$REPO/releases/tags/debug")))?.let { return it }
+        } catch (e: Exception) { }
+        val list = org.json.JSONArray(Http.get("https://api.github.com/repos/$REPO/releases?per_page=10"))
+        for (i in 0 until list.length()) {
+            val a = list.getJSONObject(i)
+            val assets = a.optJSONArray("assets") ?: continue
+            val hasZip = (0 until assets.length()).any { assets.getJSONObject(it).optString("name").endsWith(".zip", true) }
+            if (hasZip) debugAsset(a)?.let { return it }
+        }
+        return null
     }
 
     /** Blokujące: wywołuj na wątku IO. null = brak wydania z plikiem APK. */
@@ -96,8 +122,8 @@ object Updater {
     }
 
     fun download(ctx: Context, info: UpdateInfo, onProgress: (Int) -> Unit): File {
-        val dir = File(ctx.cacheDir, "updates").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
-        val f = File(dir, "update.apk")
+        val dir = File(ctx.cacheDir, "updates").apply { mkdirs(); listFiles()?.forEach { it.deleteRecursively() } }
+        val f = File(dir, if (info.url.substringBefore('?').endsWith(".zip", ignoreCase = true)) "update.zip" else "update.apk")
         val c = URL(info.url).openConnection() as HttpURLConnection
         c.connectTimeout = 15000
         c.readTimeout = 30000
@@ -125,6 +151,29 @@ object Updater {
             c.disconnect()
         }
         return f
+    }
+
+    /**
+     * Rozpakowuje archiwum ZIP do katalogu tymczasowego (cache/updates/temp) i zwraca znaleziony plik APK.
+     * Chroni przed wyjściem poza katalog docelowy (zip-slip). Wyjątek, gdy w archiwum nie ma pliku APK.
+     */
+    fun extractApk(zip: File): File {
+        val dest = File(zip.parentFile, "temp").apply { deleteRecursively(); mkdirs() }
+        val root = dest.canonicalPath + File.separator
+        var apk: File? = null
+        java.util.zip.ZipInputStream(zip.inputStream().buffered()).use { zin ->
+            while (true) {
+                val e = zin.nextEntry ?: break
+                val out = File(dest, e.name)
+                if (!out.canonicalPath.startsWith(root)) throw IOException("Nieprawidłowa ścieżka w archiwum")
+                if (e.isDirectory) { out.mkdirs(); continue }
+                out.parentFile?.mkdirs()
+                FileOutputStream(out).use { zin.copyTo(it) }
+                if (apk == null && out.name.endsWith(".apk", ignoreCase = true)) apk = out
+            }
+        }
+        zip.delete()
+        return apk ?: throw IOException("W archiwum nie ma pliku APK")
     }
 
     fun canInstall(ctx: Context): Boolean =
@@ -234,13 +283,13 @@ fun UpdateCard() {
     found?.let { UpdateDialog(it) { found = null } }
 }
 
-/** Karta w "O aplikacji": pobiera plik APK z "debug" w nazwie z najnowszego wydania i uruchamia instalację. */
+/** Karta w "O aplikacji": pobiera ZIP (albo APK) debug z wydania, rozpakowuje do katalogu tymczasowego i uruchamia instalację. */
 @Composable
 fun DebugDownloadCard(modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("Najnowszy build debug z GitHuba (wydanie „debug”)") }
+    var status by remember { mutableStateOf("Najnowszy build debug z GitHuba (ZIP z APK)") }
 
     AppCard(modifier.fillMaxWidth(), onClick = {
         if (busy) return@AppCard
@@ -255,11 +304,15 @@ fun DebugDownloadCard(modifier: Modifier = Modifier) {
             try {
                 val info = withContext(Dispatchers.IO) { Updater.latestDebug() }
                 if (info == null) {
-                    status = "Wydanie „debug” nie ma pliku APK z „debug” w nazwie."
+                    status = "Nie znaleziono wydania debug z archiwum ZIP ani plikiem APK."
                 } else {
                     status = "Pobieranie… 0%"
-                    val f = withContext(Dispatchers.IO) {
+                    var f = withContext(Dispatchers.IO) {
                         Updater.download(ctx, info) { p -> status = "Pobieranie wersji ${info.version}… $p%" }
+                    }
+                    if (f.name.endsWith(".zip", ignoreCase = true)) {
+                        status = "Rozpakowuję…"
+                        f = withContext(Dispatchers.IO) { Updater.extractApk(f) }
                     }
                     status = if (Updater.install(ctx, f)) "Pobrano. Potwierdź instalację w oknie Androida."
                     else "Zezwól na instalację i kliknij ponownie."
