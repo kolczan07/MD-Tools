@@ -325,6 +325,11 @@ private fun TokenFetchView(onDone: () -> Unit) {
     }
 }
 
+/** Ostatnia surowa ramka strumienia bez pola "parameters" (i inne komunikaty hubu), do diagnostyki alarmów. */
+internal object LiveMeta {
+    @Volatile var text: String = ""
+}
+
 /** Most JS -> Kotlin dla strumienia na żywo (wywołania z wątku WebView przekazujemy na wątek główny). */
 private class LiveBridge(
     private val onParams: (String) -> Unit,
@@ -337,6 +342,9 @@ private class LiveBridge(
 
     @JavascriptInterface
     fun status(s: String) { main.post { onStatus(s) } }
+
+    @JavascriptInterface
+    fun meta(s: String) { LiveMeta.text = s.take(4000) }
 }
 
 /**
@@ -380,7 +388,10 @@ private fun LiveStreamView(
           Android.status('połączono');
         } else if(o.type===1 && o.target==='ServiceStreamData'){
           var a=(o.arguments||[])[0];
+          if(a){ var rest={}; for(var k in a){ if(k!=='parameters') rest[k]=a[k]; } Android.meta(JSON.stringify(rest)); }
           if(a && a.parameters){ Android.data(JSON.stringify(a.parameters)); Android.status('połączono'); }
+        } else if(o.type===1 && o.target!=='OnSubscribeSuccess'){
+          Android.meta('target '+o.target+': '+JSON.stringify(o.arguments));
         } else if(o.type===6){
           send({type:6});
         } else if(o.type===7){
@@ -1340,7 +1351,8 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
         .filter { FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) }
         .take(25)
         .map { "${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}" } +
-        extras.entries.take(25).map { "(strumień) ${it.key} = ${it.value}" }
+        extras.entries.take(25).map { "(strumień) ${it.key} = ${it.value}" } +
+        listOf("(ramka bez parameters) " + LiveMeta.text.ifBlank { "brak" })
 
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
