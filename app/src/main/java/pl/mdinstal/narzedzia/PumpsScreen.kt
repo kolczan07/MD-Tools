@@ -158,13 +158,11 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                OutlinedTextField(
+                SearchField(
                     value = query,
-                    onValueChange = { query = it },
-                    placeholder = { Text("Szukaj (numer, model, e-mail)", fontSize = 14.sp) },
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    onChange = { query = it },
+                    placeholder = "Szukaj (numer, model, e-mail)",
+                    modifier = Modifier.fillMaxWidth()
                 )
                 LazyColumn(Modifier.fillMaxSize().padding(top = 8.dp)) {
                     items(filtered, key = { it.serial }) { p ->

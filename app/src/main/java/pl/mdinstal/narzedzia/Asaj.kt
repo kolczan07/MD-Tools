@@ -1157,11 +1157,10 @@ private fun AsajBody(
             }
         }
         item {
-            OutlinedTextField(
+            SearchField(
                 value = query,
-                onValueChange = onQuery,
-                label = { Text("Szukaj numeru lub kontrahenta") },
-                singleLine = true,
+                onChange = onQuery,
+                placeholder = "Szukaj numeru lub kontrahenta",
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)
             )
             if (chips.isNotEmpty()) {

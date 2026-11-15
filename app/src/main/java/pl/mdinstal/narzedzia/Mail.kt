@@ -925,7 +925,7 @@ fun MailScreen(onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MailSearchField(query, { query = it }, { load(false) }, Modifier.weight(1f))
+                    SearchField(query, { query = it }, "Szukaj", Modifier.weight(1f), onSearch = { load(false) })
                     if (folder == "INBOX") {
                         PillChip("Nieprzeczytane", onlyUnread) {
                             onlyUnread = !onlyUnread
@@ -1032,41 +1032,6 @@ private fun PillChip(text: String, selected: Boolean, onClick: () -> Unit) {
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
             color = if (selected) cs.onPrimary else cs.onSurfaceVariant
         )
-    }
-}
-
-@Composable
-private fun MailSearchField(value: String, onChange: (String) -> Unit, onSearch: () -> Unit, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    val focus = LocalFocusManager.current
-    val shape = RoundedCornerShape(50)
-    Row(
-        modifier.clip(shape).background(cs.surface).border(1.dp, cs.outlineVariant, shape).padding(horizontal = 14.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(8.dp))
-        Box(Modifier.weight(1f)) {
-            if (value.isEmpty()) Text("Szukaj", fontSize = 15.sp, color = cs.onSurfaceVariant)
-            BasicTextField(
-                value = value,
-                onValueChange = onChange,
-                singleLine = true,
-                textStyle = TextStyle(fontSize = 15.sp, color = cs.onSurface),
-                cursorBrush = SolidColor(cs.primary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focus.clearFocus(); onSearch() }),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-        if (value.isNotEmpty()) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Wyczyść",
-                tint = cs.onSurfaceVariant,
-                modifier = Modifier.size(20.dp).clickable { onChange(""); onSearch() }
-            )
-        }
     }
 }
 

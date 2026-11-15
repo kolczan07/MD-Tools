@@ -755,11 +755,10 @@ private fun DetailBody(
             }
         }
         item {
-            OutlinedTextField(
+            SearchField(
                 value = query,
-                onValueChange = onQuery,
-                label = { Text("Szukaj parametru (we wszystkich grupach)") },
-                singleLine = true,
+                onChange = onQuery,
+                placeholder = "Szukaj parametru (we wszystkich grupach)",
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)

@@ -464,12 +464,12 @@ fun RadioScreen(onBack: () -> Unit) {
                             .padding(bottom = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedTextField(
+                        SearchField(
                             value = query,
-                            onValueChange = { query = it },
-                            singleLine = true,
-                            placeholder = { Text("Szukaj stacji, np. Eska, RMF, Zet") },
-                            modifier = Modifier.weight(1f)
+                            onChange = { query = it },
+                            placeholder = "Szukaj stacji, np. Eska, RMF, Zet",
+                            modifier = Modifier.weight(1f).align(Alignment.CenterVertically),
+                            onSearch = { search() }
                         )
                         Button(
                             onClick = { search() },
