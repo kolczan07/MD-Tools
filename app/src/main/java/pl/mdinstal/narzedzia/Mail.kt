@@ -309,6 +309,10 @@ object GmailApi {
         return Base64.decode(j.getString("data"), Base64.URL_SAFE)
     }
 
+    /** Liczba nieprzeczytanych wątków w Odebranych. */
+    fun inboxUnread(token: String): Int =
+        JSONObject(exec(token, Request.Builder().url("$API/labels/INBOX"))).optInt("threadsUnread")
+
     fun profileHistoryId(token: String): String =
         JSONObject(exec(token, Request.Builder().url("$API/profile"))).optString("historyId")
 
@@ -560,6 +564,13 @@ fun MailScreen(onBack: () -> Unit) {
         }
     }
 
+    /** Odświeża licznik nieprzeczytanych (kafelek na ekranie głównym). */
+    suspend fun updateUnread() {
+        try { Prefs.setMailUnread(ctx, api { t -> GmailApi.inboxUnread(t) }) }
+        catch (e: CancellationException) { throw e }
+        catch (e: Exception) { }
+    }
+
     fun load(more: Boolean) {
         if (busy) return
         scope.launch {
@@ -574,6 +585,7 @@ fun MailScreen(onBack: () -> Unit) {
                     rows.addAll(fetched)
                     nextToken = next
                 }
+                if (label == "INBOX") updateUnread()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -660,6 +672,7 @@ fun MailScreen(onBack: () -> Unit) {
                 if (idx >= 0 && rows[idx].unread) {
                     rows[idx] = rows[idx].copy(unread = false)
                     try { api { tk -> GmailApi.markRead(tk, id) } } catch (e: Exception) { }
+                    updateUnread()
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -691,6 +704,7 @@ fun MailScreen(onBack: () -> Unit) {
                 }
             }
             if (failed > 0) status = "Nie udało się oznaczyć wiadomości: $failed"
+            updateUnread()
             busy = false
         }
     }
@@ -714,6 +728,7 @@ fun MailScreen(onBack: () -> Unit) {
                 }
             }
             if (failed > 0) status = "Nie udało się usunąć wiadomości: $failed"
+            updateUnread()
             busy = false
         }
     }

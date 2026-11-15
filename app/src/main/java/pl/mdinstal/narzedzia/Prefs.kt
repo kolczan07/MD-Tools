@@ -164,6 +164,10 @@ object Prefs {
     fun mailFast(c: Context): Boolean = sp(c).getBoolean("mail_fast", true)
     fun setMailFast(c: Context, v: Boolean) { sp(c).edit().putBoolean("mail_fast", v).apply() }
 
+    /** Ostatnio znana liczba nieprzeczytanych wątków w Odebranych (plakietka na kafelku Poczta). */
+    fun mailUnread(c: Context): Int = sp(c).getInt("mail_unread", 0)
+    fun setMailUnread(c: Context, v: Int) { sp(c).edit().putInt("mail_unread", v).apply() }
+
     fun mailHistoryId(c: Context): String = sp(c).getString("mail_history_id", "") ?: ""
     fun setMailHistoryId(c: Context, v: String) { sp(c).edit().putString("mail_history_id", v).apply() }
 

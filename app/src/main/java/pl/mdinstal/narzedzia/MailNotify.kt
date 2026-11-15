@@ -58,6 +58,7 @@ object MailNotify {
             // Bez zgody w tle nie da się nic zrobić — czekamy aż użytkownik wejdzie w Pocztę.
             if (auth !is DriveAuth.Token) return@withLock
             val token = auth.token
+            try { Prefs.setMailUnread(c, GmailApi.inboxUnread(token)) } catch (e: Exception) { }
             val last = Prefs.mailHistoryId(c)
             if (last.isEmpty()) {
                 Prefs.setMailHistoryId(c, GmailApi.profileHistoryId(token))

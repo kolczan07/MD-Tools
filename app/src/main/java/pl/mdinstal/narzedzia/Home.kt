@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,7 +29,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +68,23 @@ private val docs = listOf(
 @Composable
 fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
+    val homeCtx = LocalContext.current
+    // Najpierw ostatnia znana liczba, potem ciche odświeżenie z Gmaila (bez okien zgody).
+    var mailUnread by remember { mutableIntStateOf(Prefs.mailUnread(homeCtx)) }
+    LaunchedEffect(Unit) {
+        val account = Prefs.mailAccount(homeCtx)
+        if (account.isBlank()) return@LaunchedEffect
+        try {
+            val auth = GmailApi.authorize(homeCtx, account)
+            if (auth is DriveAuth.Token) {
+                val n = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { GmailApi.inboxUnread(auth.token) }
+                Prefs.setMailUnread(homeCtx, n)
+                mailUnread = n
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) { }
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -84,7 +106,7 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
 
         Spacer(Modifier.height(20.dp))
         SectionTitle("Narzędzia")
-        TileGrid(tools, onOpen, onOpenPumps)
+        TileGrid(tools, onOpen, onOpenPumps, mailUnread)
 
         // Sekcja "Aplikacje" widoczna tylko wtedy, gdy w Ustawieniach → Skróty dodano jakąś aplikację.
         val ctx = LocalContext.current
@@ -151,12 +173,12 @@ private fun AppsGrid(apps: List<Shortcut>) {
 }
 
 @Composable
-private fun TileGrid(items: List<Tile>, onOpen: (Screen) -> Unit, onPumps: () -> Unit) {
+private fun TileGrid(items: List<Tile>, onOpen: (Screen) -> Unit, onPumps: () -> Unit, mailUnread: Int = 0) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items.chunked(2).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 row.forEach { t ->
-                    ToolTile(t, Modifier.weight(1f)) {
+                    ToolTile(t, Modifier.weight(1f), badge = if (t.target == Screen.Mail) mailUnread else 0) {
                         val target = t.target
                         if (target != null) onOpen(target) else onPumps()
                     }
@@ -168,9 +190,10 @@ private fun TileGrid(items: List<Tile>, onOpen: (Screen) -> Unit, onPumps: () ->
 }
 
 @Composable
-private fun ToolTile(t: Tile, modifier: Modifier, onClick: () -> Unit) {
+private fun ToolTile(t: Tile, modifier: Modifier, badge: Int = 0, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     AppCard(modifier = modifier.heightIn(min = 150.dp), onClick = onClick) {
+        Box(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             if (t.logo != null && !t.logoWide) {
                 // Kwadratowe logo z własnym tłem.
@@ -203,6 +226,18 @@ private fun ToolTile(t: Tile, modifier: Modifier, onClick: () -> Unit) {
             Text(t.title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
             Spacer(Modifier.height(6.dp))
             Text(t.desc, fontSize = 13.sp, color = cs.onSurfaceVariant)
+        }
+        if (badge > 0) {
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(12.dp)
+                    .heightIn(min = 22.dp).widthIn(min = 22.dp)
+                    .clip(RoundedCornerShape(11.dp)).background(cs.primary)
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(if (badge > 99) "99+" else badge.toString(), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = cs.onPrimary)
+            }
+        }
         }
     }
 }
