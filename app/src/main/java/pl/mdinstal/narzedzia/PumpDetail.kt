@@ -891,7 +891,17 @@ private fun PumpSummaryCard(pump: Pump, d: Detail, current: Map<String, Any?>) {
         return String.format(Locale.US, "%.1f", n) + " °C"
     }
 
-    val roomKey = pickKey(current, "IndoorT")
+    // Temperatura ogólna zależy od konfiguracji: z czujnikiem pokojowym (IndoorTHW = 1) IndoorT,
+    // bez niego: z zasobnikiem buforowym (BufferTank = 1) BufferT, bez bufora WaterOutT.
+    fun flag(k: String): Boolean? {
+        val v = current.entries.firstOrNull { it.key.equals(k, ignoreCase = true) }?.value ?: return null
+        return v == true || (v is Number && v.toDouble() != 0.0)
+    }
+    val roomKey = when {
+        flag("IndoorTHW") == false && flag("BufferTank") == true -> pickKey(current, "BufferT")
+        flag("IndoorTHW") == false -> pickKey(current, "WaterOutT")
+        else -> pickKey(current, "IndoorT")
+    }
     val waterKey = pickKey(current, "BoilerT", "HeatingSupplyT", "SupplyT", "OutletT", "WaterOutT")
     val usedKey = pickKey(current, "PowerElectricity")
     val prodKey = pickKey(current, "PowerHeating")
