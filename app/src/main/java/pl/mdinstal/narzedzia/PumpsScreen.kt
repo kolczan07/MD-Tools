@@ -6,7 +6,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,18 +13,17 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -46,11 +44,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 internal val OnlineGreen = Color(0xFF16A34A)
+
+/** Po ilu ms od nieudanej synchronizacji pokazać komunikat o błędzie. */
+private const val ERROR_DELAY_MS = 5_000L
 
 /** Lista pomp pobrana z portalu Iglutech. Dotknięcie wiersza otwiera szczegóły pompy (z nich można przejść do portalu). */
 @Composable
@@ -60,8 +58,9 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
     var updated by remember { mutableStateOf(PumpStore.updatedAt(ctx)) }
     var sync by remember { mutableStateOf(PumpStore.syncState(ctx)) }
     var diag by remember { mutableStateOf(PumpStore.diag(ctx)) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var query by remember { mutableStateOf("") }
-    /** 0 = wszystkie, 1 = online, 2 = offline. */
+    /** 0 = wszystkie, 1 = online, 2 = offline. Ustawiane dotknięciem kafelka u góry; ponowne dotknięcie zdejmuje filtr. */
     var statusFilter by remember { mutableStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Pump?>(null) }
@@ -73,6 +72,7 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
             updated = PumpStore.updatedAt(ctx)
             sync = PumpStore.syncState(ctx)
             diag = PumpStore.diag(ctx)
+            now = System.currentTimeMillis()
             delay(2000)
         }
     }
@@ -110,34 +110,31 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
                     .padding(top = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                StatTile(pumps.size.toString(), "pomp", MaterialTheme.colorScheme.onSurface, Modifier.weight(1f))
-                StatTile(onlineCount.toString(), "online", OnlineGreen, Modifier.weight(1f))
-                StatTile(offlineCount.toString(), "offline", MaterialTheme.colorScheme.onSurfaceVariant, Modifier.weight(1f))
+                StatTile(pumps.size.toString(), "pomp", MaterialTheme.colorScheme.onSurface, statusFilter == 0, Modifier.weight(1f)) { statusFilter = 0 }
+                StatTile(onlineCount.toString(), "online", OnlineGreen, statusFilter == 1, Modifier.weight(1f)) { statusFilter = if (statusFilter == 1) 0 else 1 }
+                StatTile(offlineCount.toString(), "offline", MaterialTheme.colorScheme.onSurfaceVariant, statusFilter == 2, Modifier.weight(1f)) { statusFilter = if (statusFilter == 2) 0 else 2 }
             }
 
-            val syncText = when {
-                sync.first == "running" && System.currentTimeMillis() - sync.second < 60_000 ->
-                    "aktualizacja przy starcie trwa…"
-                sync.first == "ok" -> "aktualizacja przy starcie zakończona"
-                sync.first == "login" -> "aktualizacja wymaga zalogowania, otwórz Iglutech Service"
-                sync.first == "timeout" -> "aktualizacja przy starcie nie udała się"
-                else -> null
-            }
-            val metaParts = listOfNotNull(
-                if (updated > 0L) "Ostatni odczyt: " + SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.getDefault()).format(Date(updated)) else null,
-                syncText
-            )
-            if (metaParts.isNotEmpty()) {
-                SubText(metaParts.joinToString(" · "), Modifier.padding(top = 8.dp, start = 2.dp))
-            }
-            // Skąd pochodzą dane (API albo tabela ze strony) i dlaczego API nie zadziałało. Da się zaznaczyć i skopiować.
-            if (diag.isNotBlank()) {
+            // Błąd pokazujemy dopiero po chwili od zakończenia próby, żeby nie migał przy łączeniu z API.
+            // Przy starcie aplikacji próby i tak trwają do 30 s, więc to jest stan końcowy, a nie chwilowy.
+            val failure: String? = if (
+                (sync.first == "login" || sync.first == "timeout") &&
+                now - sync.second >= ERROR_DELAY_MS
+            ) {
+                when {
+                    sync.first == "login" -> "Nie udało się pobrać listy pomp: wymagane zalogowanie. Otwórz Iglutech Service."
+                    diag.isNotBlank() && !diag.startsWith("API OK") -> "Nie udało się pobrać listy pomp: $diag"
+                    else -> "Nie udało się pobrać listy pomp: przekroczono czas oczekiwania."
+                }
+            } else null
+            if (failure != null) {
+                // Da się zaznaczyć i skopiować.
                 SelectionContainer {
                     Text(
-                        "Źródło danych: $diag",
+                        failure,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 2.dp)
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp, start = 2.dp)
                     )
                 }
             }
@@ -163,22 +160,12 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("Szukaj (numer, model, e-mail)") },
+                    placeholder = { Text("Szukaj (numer, model, e-mail)", fontSize = 14.sp) },
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
                 )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(selected = statusFilter == 0, onClick = { statusFilter = 0 }, label = { Text("Wszystkie ${pumps.size}") })
-                    FilterChip(selected = statusFilter == 1, onClick = { statusFilter = 1 }, label = { Text("Online $onlineCount") })
-                    FilterChip(selected = statusFilter == 2, onClick = { statusFilter = 2 }, label = { Text("Offline $offlineCount") })
-                }
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize().padding(top = 8.dp)) {
                     items(filtered, key = { it.serial }) { p ->
                         PumpRow(p) { selected = p }
                     }
@@ -210,11 +197,31 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
 }
 
 @Composable
-private fun StatTile(value: String, label: String, color: Color, modifier: Modifier = Modifier) {
-    AppCard(modifier) {
-        Column(Modifier.padding(12.dp)) {
+private fun StatTile(
+    value: String,
+    label: String,
+    color: Color,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    AppCard(modifier, onClick = onClick) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+        ) {
             Text(value, fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = color)
             SubText(label)
+            // Delikatne podkreślenie aktywnego filtra; zawsze zajmuje miejsce, żeby kafelki nie skakały.
+            Box(
+                Modifier
+                    .padding(top = 6.dp)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(if (active) color.copy(alpha = 0.3f) else Color.Transparent)
+            )
         }
     }
 }

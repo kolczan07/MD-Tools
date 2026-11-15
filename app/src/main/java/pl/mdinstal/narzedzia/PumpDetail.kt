@@ -535,8 +535,7 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                 when {
                     pump.id <= 0L -> {
                         Text(
-                            "Brak identyfikatora tej pompy. Wróć do listy i poczekaj, aż odświeży się z API " +
-                                "(linijka „Źródło danych” ma pokazać „API OK”).",
+                            "Brak identyfikatora tej pompy. Wróć do listy i poczekaj, aż odświeży się z API.",
                             modifier = Modifier.padding(top = 12.dp)
                         )
                         Button(onClick = onOpenPortal, modifier = Modifier.padding(top = 12.dp)) {
