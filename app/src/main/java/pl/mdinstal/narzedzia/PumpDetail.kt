@@ -1347,12 +1347,22 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
     }
     var confirm by remember { mutableStateOf(false) }
     // Diagnostyka: wszystkie parametry związane z alarmami (nawet nieaktywne), żeby dało się dopasować opis błędu.
-    val diag = d.params
-        .filter { FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) }
-        .take(25)
-        .map { "${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}" } +
-        extras.entries.take(25).map { "(strumień) ${it.key} = ${it.value}" } +
-        listOf("(ramka bez parameters) " + LiveMeta.text.ifBlank { "brak" })
+    val diag = buildList {
+        add("RAMKA bez parameters: " + LiveMeta.text.ifBlank { "brak (jeszcze nie odebrano)" })
+        add("Dodatkowych pól strumienia: ${extras.size}, parametrów w stanie: ${current.size}")
+        // Wszystko, co jest włączone (true) – tu powinien być aktywny alarm, jeśli to flaga.
+        val on = current.filter { it.value == true }.keys.sorted()
+        add("Włączone (true): " + on.joinToString(", ").ifBlank { "brak" })
+        // Pola strumienia, których nazwa jest znanym alarmem z tłumaczeń portalu, niezależnie od wartości.
+        val named = extras.filter { d.alarmTexts.containsKey(it.key) }
+        add("Znane alarmy w strumieniu: " + named.entries.joinToString(", ") { "${it.key}=${it.value}" }.ifBlank { "brak" })
+        // Pola o nazwie wskazującej na błąd, spoza konfiguracji.
+        val sus = extras.filter { Regex("err|fail|alarm|alm|warn|calib|fault|stuck|leak|freeze", RegexOption.IGNORE_CASE).containsMatchIn(it.key) }
+        add("Podejrzane nazwy: " + sus.entries.joinToString(", ") { "${it.key}=${it.value}" }.ifBlank { "brak" })
+        d.params
+            .filter { FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) }
+            .forEach { add("${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}") }
+    }
 
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
