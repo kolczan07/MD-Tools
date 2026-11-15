@@ -1406,7 +1406,7 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
                 allLines.forEach { (k, v) ->
                     Column {
                         Text(v, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-                        SubText(k + " = " + (current[k]?.toString() ?: ""))
+                        SubText(if (current[k] != null) k + " = " + current[k].toString() else k)
                     }
                 }
             }
