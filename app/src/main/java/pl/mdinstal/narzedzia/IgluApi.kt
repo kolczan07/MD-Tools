@@ -204,6 +204,29 @@ object IgluApi {
         get("$BASE/devices/$id/request", token)
     }
 
+    @Volatile private var alarmTextsCache: Map<String, String>? = null
+
+    /**
+     * Nazwy alarmów z tłumaczeń portalu (translations/en.json, klucze "alarm.<Nazwa>" -> opis, np.
+     * FloorTError -> "Floor temperature sensor error"). Pobierane raz i trzymane w pamięci; przy błędzie pusta mapa.
+     */
+    fun alarmTexts(token: String): Map<String, String> {
+        alarmTextsCache?.let { return it }
+        return try {
+            val o = JSONObject(get("$BASE/translations/en.json?appId=IgluPortal", token))
+            val m = LinkedHashMap<String, String>()
+            val it = o.keys()
+            while (it.hasNext()) {
+                val k = it.next()
+                if (k.startsWith("alarm.") && !k.startsWith("alarm.description.")) m[k.removePrefix("alarm.")] = o.optString(k)
+            }
+            if (m.isNotEmpty()) alarmTextsCache = m
+            m
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
     /** Opis parametrów (słowo kluczowe, jednostka, dostęp RW/R, grupa, lista wartości). Po numerze seryjnym. */
     fun config(serial: String, token: String): JSONArray =
         JSONObject(get("$BASE/devices/$serial/config/render", token)).getJSONArray("parameters")

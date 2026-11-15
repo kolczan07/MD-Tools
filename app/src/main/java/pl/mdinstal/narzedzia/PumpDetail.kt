@@ -126,7 +126,9 @@ private class Detail(
     val current: Map<String, Any?>,
     val desired: Map<String, Any?>,
     /** Wszystkie pola z odpowiedzi heatPumps/{id} (spłaszczone), do okna z danymi użytkownika. */
-    val info: List<Pair<String, String>> = emptyList()
+    val info: List<Pair<String, String>> = emptyList(),
+    /** Nazwa alarmu -> opis z tłumaczeń portalu (np. FloorTError -> "Floor temperature sensor error"). */
+    val alarmTexts: Map<String, String> = emptyMap()
 )
 
 private fun JSONObject.s(k: String): String = if (isNull(k)) "" else optString(k)
@@ -189,7 +191,8 @@ private fun loadDetail(p: Pump, token: String): Detail {
         params = params,
         current = toMap(st.optJSONObject("currentState")),
         desired = toMap(st.optJSONObject("desiredState")),
-        info = flattenInfo(hp)
+        info = flattenInfo(hp),
+        alarmTexts = IgluApi.alarmTexts(token)
     )
 }
 
@@ -1320,6 +1323,13 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
         }
         .sortedBy { it.order }
         .map { it.keyword to faultText(current[it.keyword], it) }
+    // Aktywne alarmy przychodzą jako dodatkowe pola strumienia (spoza opisu parametrów), np. FloorTError = true.
+    val known = d.params.map { it.keyword }.toSet()
+    val extras = current.filter { (k, _) -> k !in known }
+    val activeAlarms = extras
+        .filter { (k, v) -> faultActive(v) && (d.alarmTexts.containsKey(k) || v == true) }
+        .map { (k, _) -> k to (d.alarmTexts[k] ?: k) }
+    val allLines = lines + activeAlarms
     // Reset: zapisywalny parametr, którego nazwa albo etykieta to "reset alarms" (w dowolnej kolejności).
     val resetParam = d.params.firstOrNull {
         canEdit(it) && Regex("reset\\W*(alarm|alm|err|fault|warn)|(alarm|alm|err|fault|warn)\\w*\\W*reset", RegexOption.IGNORE_CASE).containsMatchIn(it.raw)
@@ -1329,7 +1339,8 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
     val diag = d.params
         .filter { FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) }
         .take(25)
-        .map { "${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}" }
+        .map { "${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}" } +
+        extras.entries.take(25).map { "(strumień) ${it.key} = ${it.value}" }
 
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1344,10 +1355,10 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
                     fontWeight = FontWeight.Bold, fontSize = 17.sp, color = color
                 )
             }
-            if (lines.isEmpty()) {
+            if (allLines.isEmpty()) {
                 SubText("Pompa zgłasza " + (if (d.alarm) "alarm" else "ostrzeżenie") + ", ale w stanie nie ma opisu błędu.")
             } else {
-                lines.forEach { (k, v) ->
+                allLines.forEach { (k, v) ->
                     Column {
                         Text(v, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
                         SubText(k + " = " + (current[k]?.toString() ?: ""))
