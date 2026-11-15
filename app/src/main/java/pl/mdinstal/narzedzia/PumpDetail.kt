@@ -325,7 +325,7 @@ private fun TokenFetchView(onDone: () -> Unit) {
     }
 }
 
-/** Ostatnia surowa ramka strumienia bez pola "parameters" (i inne komunikaty hubu), do diagnostyki alarmów. */
+/** Ostatnia surowa ramka strumienia bez pola "parameters" (i inne komunikaty hubu). */
 internal object LiveMeta {
     @Volatile var text: String = ""
 
@@ -1369,24 +1369,6 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
         canEdit(it) && Regex("reset\\W*(alarm|alm|err|fault|warn)|(alarm|alm|err|fault|warn)\\w*\\W*reset", RegexOption.IGNORE_CASE).containsMatchIn(it.raw)
     }
     var confirm by remember { mutableStateOf(false) }
-    // Diagnostyka: wszystkie parametry związane z alarmami (nawet nieaktywne), żeby dało się dopasować opis błędu.
-    val diag = buildList {
-        add("RAMKA bez parameters: " + LiveMeta.text.ifBlank { "brak (jeszcze nie odebrano)" })
-        add("Dodatkowych pól strumienia: ${extras.size}, parametrów w stanie: ${current.size}")
-        // Wszystko, co jest włączone (true) – tu powinien być aktywny alarm, jeśli to flaga.
-        val on = current.filter { it.value == true }.keys.sorted()
-        add("Włączone (true): " + on.joinToString(", ").ifBlank { "brak" })
-        // Pola strumienia, których nazwa jest znanym alarmem z tłumaczeń portalu, niezależnie od wartości.
-        val named = extras.filter { d.alarmTexts.containsKey(it.key) }
-        add("Znane alarmy w strumieniu: " + named.entries.joinToString(", ") { "${it.key}=${it.value}" }.ifBlank { "brak" })
-        // Pola o nazwie wskazującej na błąd, spoza konfiguracji.
-        val sus = extras.filter { Regex("err|fail|alarm|alm|warn|calib|fault|stuck|leak|freeze", RegexOption.IGNORE_CASE).containsMatchIn(it.key) }
-        add("Podejrzane nazwy: " + sus.entries.joinToString(", ") { "${it.key}=${it.value}" }.ifBlank { "brak" })
-        d.params
-            .filter { FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) }
-            .forEach { add("${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}") }
-    }
-
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1414,13 +1396,6 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
                 Button(onClick = { confirm = true }) { Text("Resetuj") }
             }
             if (saveMsg != null) Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
-            if (diag.isNotEmpty()) {
-                var showDiag by remember { mutableStateOf(false) }
-                TextButton(onClick = { showDiag = !showDiag }) { Text(if (showDiag) "Ukryj diagnostykę" else "Diagnostyka") }
-                if (showDiag) androidx.compose.foundation.text.selection.SelectionContainer {
-                    Column { diag.forEach { SubText(it) } }
-                }
-            }
         }
     }
     if (confirm && resetParam != null) {
