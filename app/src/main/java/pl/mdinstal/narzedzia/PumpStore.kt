@@ -15,7 +15,10 @@ data class Pump(
     /** Kiedy ostatnio widziana na liście w portalu (ms). */
     val seen: Long,
     /** Wewnętrzny identyfikator pompy w API Iglutech (0 = nieznany, np. lista z samej tabeli). */
-    val id: Long = 0L
+    val id: Long = 0L,
+    /** Flagi z danych systemowych pompy (systemData.alarm / warning). */
+    val alarm: Boolean = false,
+    val warning: Boolean = false
 ) {
     val online: Boolean get() = status.equals("online", ignoreCase = true)
 }
@@ -43,7 +46,9 @@ object PumpStore {
                     since = o.optString("since"),
                     email = o.optString("email"),
                     seen = o.optLong("seen"),
-                    id = o.optLong("id")
+                    id = o.optLong("id"),
+                    alarm = o.optBoolean("alarm"),
+                    warning = o.optBoolean("warning")
                 )
             }.filter { it.serial.isNotBlank() }.sortedBy { it.serial }
         } catch (e: Exception) {
@@ -79,7 +84,10 @@ object PumpStore {
                 email = o.optString("email").ifBlank { old[serial]?.email ?: "" },
                 seen = now,
                 // Odczyt z samej tabeli nie zna id: zostaje to zapisane wcześniej z API.
-                id = o.optLong("id").takeIf { it > 0L } ?: old[serial]?.id ?: 0L
+                id = o.optLong("id").takeIf { it > 0L } ?: old[serial]?.id ?: 0L,
+                // Odczyt z tabeli nie zna flag: zostają te z API.
+                alarm = if (o.has("alarm")) o.optBoolean("alarm") else old[serial]?.alarm ?: false,
+                warning = if (o.has("warning")) o.optBoolean("warning") else old[serial]?.warning ?: false
             )
             val prev = old[serial]
             if (prev == null || prev.copy(seen = 0) != p.copy(seen = 0)) changed = true
@@ -105,6 +113,8 @@ object PumpStore {
                     .put("email", it.email)
                     .put("seen", it.seen)
                     .put("id", it.id)
+                    .put("alarm", it.alarm)
+                    .put("warning", it.warning)
             )
         }
         prefs(ctx).edit().putString(KEY_LIST, a.toString()).putLong(KEY_UPDATED, now).apply()

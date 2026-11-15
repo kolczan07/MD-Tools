@@ -23,6 +23,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -80,7 +84,8 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
 
     val filtered = remember(pumps, query, statusFilter) {
         val q = query.trim().lowercase()
-        pumps.filter { p ->
+        // Alarmy na górze, potem ostrzeżenia, reszta po numerze seryjnym (sortedBy jest stabilne).
+        pumps.sortedBy { if (it.alarm) 0 else if (it.warning) 1 else 2 }.filter { p ->
             (statusFilter == 0 || (statusFilter == 1 && p.online) || (statusFilter == 2 && !p.online)) &&
                 (q.isEmpty() || p.serial.lowercase().contains(q) || p.model.lowercase().contains(q) ||
                     p.email.lowercase().contains(q))
@@ -257,6 +262,13 @@ private fun PumpRow(p: Pump, onClick: () -> Unit) {
                 Column(Modifier.weight(1f)) {
                     Text(p.serial, fontWeight = FontWeight.Bold, fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface)
                     if (p.model.isNotBlank()) SubText(p.model)
+                }
+                if (p.alarm) {
+                    Icon(Icons.Filled.Report, "Alarm", tint = Color(0xFFDC2626), modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(8.dp))
+                } else if (p.warning) {
+                    Icon(Icons.Filled.Warning, "Ostrzeżenie", tint = Color(0xFFF59E0B), modifier = Modifier.size(26.dp))
+                    Spacer(Modifier.width(8.dp))
                 }
                 StatusPill(p.status, p.online)
             }

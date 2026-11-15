@@ -44,6 +44,8 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Thermostat
@@ -66,6 +68,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
@@ -584,6 +587,25 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
                         editMode = editMode,
                         onToggleEdit = { if (editMode) editMode = false else confirmEdit = true },
                         onEdit = { editing = it },
+                        onReset = { rp ->
+                            val token = IgluToken.token
+                            if (token == null) {
+                                saveMsg = "Brak tokenu, odśwież ekran i spróbuj ponownie."
+                            } else {
+                                scope.launch {
+                                    saveMsg = "Resetowanie błędu…"
+                                    try {
+                                        val v: Any = if (rp.valueType == "boolean") true else 1L
+                                        withContext(Dispatchers.IO) { IgluApi.setParam(pump.id, rp.keyword, v, token) }
+                                        saveMsg = "Wysłano reset (${rp.keyword}). Stan pompy odświeży się za chwilę."
+                                        delay(3000)
+                                        reload++
+                                    } catch (e: Exception) {
+                                        saveMsg = "Błąd resetu: ${e.message}"
+                                    }
+                                }
+                            }
+                        },
                         saveMsg = saveMsg,
                         current = effective,
                         liveStatus = liveStatus.ifBlank { "—" } + " · odebrane: ${live.size} param.",
@@ -661,6 +683,7 @@ private fun DetailBody(
     editMode: Boolean,
     onToggleEdit: () -> Unit,
     onEdit: (Param) -> Unit,
+    onReset: (Param) -> Unit,
     saveMsg: String?,
     current: Map<String, Any?>,
     liveStatus: String,
@@ -692,6 +715,7 @@ private fun DetailBody(
 
     LazyColumn(Modifier.fillMaxSize()) {
         item { PumpSummaryCard(pump, d, current) }
+        if (d.alarm || d.warning) item { FaultCard(d, current, saveMsg, onReset) }
         item {
             AppCard(
                 Modifier
@@ -1243,6 +1267,76 @@ private fun FieldRow(p: Param, cur: Any?, des: Any?, editable: Boolean, locked: 
                 Text("  ✎", fontSize = 16.sp, color = cs.primary)
             }
         }
+    }
+}
+
+private val FAULT_KEY = Regex("alarm|error|fault|err|warn|usterk|blad|błąd", RegexOption.IGNORE_CASE)
+private val RESET_KEY = Regex("reset|kasuj|clear|ack", RegexOption.IGNORE_CASE)
+
+/** Czy wartość parametru oznacza aktywny błąd: prawda, liczba różna od zera albo niepusty tekst. */
+private fun faultActive(v: Any?): Boolean = when (v) {
+    null -> false
+    is Boolean -> v
+    is Number -> v.toDouble() != 0.0
+    else -> v.toString().isNotBlank() && v.toString() != "0" && !v.toString().equals("false", true)
+}
+
+/**
+ * Karta błędu na górze szczegółów pompy, gdy jest alarm albo ostrzeżenie: opis (z parametrów stanu, których nazwa
+ * wskazuje na błąd, z opisem z listy wartości, jeśli jest) i przycisk Resetuj. Przycisk pojawia się tylko, gdy pompa
+ * ma zapisywalny parametr resetu błędów; wysłanie wymaga potwierdzenia.
+ */
+@Composable
+private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, onReset: (Param) -> Unit) {
+    val red = Color(0xFFDC2626)
+    val amber = Color(0xFFF59E0B)
+    val color = if (d.alarm) red else amber
+    val lines = d.params
+        .filter { FAULT_KEY.containsMatchIn(it.keyword) && !RESET_KEY.containsMatchIn(it.keyword) && faultActive(current[it.keyword]) }
+        .sortedBy { it.order }
+        .map { it.keyword to valueText(current[it.keyword], it) }
+    val resetParam = d.params.firstOrNull {
+        RESET_KEY.containsMatchIn(it.keyword) && FAULT_KEY.containsMatchIn(it.keyword) && canEdit(it)
+    }
+    var confirm by remember { mutableStateOf(false) }
+
+    AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (d.alarm) Icons.Filled.Report else Icons.Filled.Warning,
+                    null, tint = color, modifier = Modifier.size(30.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (d.alarm) "Alarm pompy" else "Ostrzeżenie pompy",
+                    fontWeight = FontWeight.Bold, fontSize = 17.sp, color = color
+                )
+            }
+            if (lines.isEmpty()) {
+                SubText("Pompa zgłasza " + (if (d.alarm) "alarm" else "ostrzeżenie") + ", ale w stanie nie ma opisu błędu.")
+            } else {
+                lines.forEach { (k, v) ->
+                    Column {
+                        Text(v, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                        SubText(k)
+                    }
+                }
+            }
+            if (resetParam != null) {
+                Button(onClick = { confirm = true }) { Text("Resetuj") }
+            }
+            if (saveMsg != null) Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+    if (confirm && resetParam != null) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Zresetować błąd?") },
+            text = { Text("Do pompy ${d.title} zostanie wysłany reset błędu (${resetParam.keyword}).") },
+            confirmButton = { TextButton(onClick = { confirm = false; onReset(resetParam) }) { Text("Resetuj") } },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Anuluj") } }
+        )
     }
 }
 

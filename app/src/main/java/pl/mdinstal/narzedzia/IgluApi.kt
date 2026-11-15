@@ -110,6 +110,7 @@ object IgluApi {
                 val d = data.getJSONObject(i)
                 val sn = d.str("serialNo")
                 if (sn.isBlank()) continue
+                val flags = flagsOf(d)
                 out.put(
                     JSONObject()
                         .put("id", d.optLong("id"))
@@ -120,12 +121,45 @@ object IgluApi {
                         .put("since", d.str("registeredAt").take(10))
                         // Usuń tę linijkę, jeśli nie chcesz trzymać adresów e-mail klientów w aplikacji.
                         .put("email", d.str("ownerEmail"))
+                        .apply { if (flags != null) put("alarm", flags.first).put("warning", flags.second) }
                 )
             }
             if (o.isNull("nextPageNumber")) break
             page = o.getInt("nextPageNumber")
         }
+        enrichFlags(out, token)
         return out.toString()
+    }
+
+    /** Alarm/ostrzeżenie z obiektu pompy (systemData albo pola na wierzchu); null, gdy API ich nie podaje. */
+    private fun flagsOf(d: JSONObject): Pair<Boolean, Boolean>? {
+        val sd = d.optJSONObject("systemData")
+        val src = listOfNotNull(sd, d).firstOrNull { it.has("alarm") || it.has("warning") } ?: return null
+        return Pair(src.optBoolean("alarm"), src.optBoolean("warning"))
+    }
+
+    /**
+     * Gdy lista nie niesie flag alarm/ostrzeżenie, dopytuje o nie szczegóły każdej pompy (heatPumps/{id}),
+     * po kilka naraz. Błąd pojedynczej pompy jest pomijany, a pompa zostaje bez flag.
+     */
+    private fun enrichFlags(list: JSONArray, token: String) {
+        val missing = (0 until list.length()).map { list.getJSONObject(it) }.filter { !it.has("alarm") && it.optLong("id") > 0L }
+        if (missing.isEmpty()) return
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(4)
+        try {
+            missing.map { o ->
+                pool.submit {
+                    try {
+                        val f = flagsOf(JSONObject(get("$BASE/heatPumps/${o.optLong("id")}", token)))
+                        if (f != null) synchronized(o) { o.put("alarm", f.first).put("warning", f.second) }
+                    } catch (e: Exception) {
+                        Log.d(API_TAG, "flagi ${o.optString("serial")}: ${e.message}")
+                    }
+                }
+            }.forEach { try { it.get() } catch (e: Exception) { } }
+        } finally {
+            pool.shutdown()
+        }
     }
 
     /** Szczegóły pompy (nazwa własna, status, wersje, dane systemowe). Po wewnętrznym id pompy. */
