@@ -39,6 +39,26 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
@@ -224,48 +244,105 @@ fun MailComposeScreen(
 
     BackHandler { tryClose() }
 
+    val cs = MaterialTheme.colorScheme
     AppScaffold(
         if (init.threadId != null) "Odpowiedź" else "Nowa wiadomość",
         { tryClose() },
-        actions = { TextButton(enabled = !busy, onClick = { send() }) { Text(if (busy) "Wysyłanie…" else "Wyślij") } }
+        actions = {
+            Button(
+                enabled = !busy,
+                onClick = { send() },
+                shape = RoundedCornerShape(50),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                modifier = Modifier.padding(end = 8.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(if (busy) "Wysyłanie…" else "Wyślij", fontWeight = FontWeight.Bold)
+            }
+        }
     ) { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).imePadding().verticalScroll(rememberScrollState()).padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            Modifier.fillMaxSize().padding(pad).imePadding().verticalScroll(rememberScrollState()).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            RecipientField("Do", to, { to = it }, contacts)
-            if (showCc) {
-                RecipientField("DW (kopia)", cc, { cc = it }, contacts)
-            } else {
-                TextButton(onClick = { showCc = true }, modifier = Modifier.align(Alignment.End)) { Text("+ DW") }
+            AppCard(Modifier.fillMaxWidth()) {
+                RecipientRow("Do", to, { to = it }, contacts) {
+                    if (!showCc) {
+                        Text(
+                            "DW",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = cs.primary,
+                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showCc = true }.padding(horizontal = 6.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+                if (showCc) {
+                    ComposeDivider()
+                    RecipientRow("DW", cc, { cc = it }, contacts)
+                }
+                ComposeDivider()
+                FieldRow("Temat", subject, { subject = it })
             }
-            LabeledField("Temat", subject, { subject = it })
-            Column {
-                Text("Treść", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                OutlinedTextField(
+            AppCard(Modifier.fillMaxWidth()) {
+                BasicTextField(
                     value = bodyTf,
                     onValueChange = { bodyTf = it },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 280.dp).padding(top = 4.dp),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
+                    textStyle = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, color = cs.onSurface),
+                    cursorBrush = SolidColor(cs.primary),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp).padding(14.dp)
                 )
             }
             atts.toList().forEach { a ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(50)).background(cs.surfaceVariant).padding(start = 12.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        "📎 ${a.name}  (${kb(a.size)})",
-                        modifier = Modifier.weight(1f),
+                        a.name,
+                        modifier = Modifier.weight(1f, fill = false),
                         fontSize = 14.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = cs.onSurface
                     )
-                    TextButton(onClick = { atts.remove(a) }) { Text("Usuń") }
+                    Spacer(Modifier.width(8.dp))
+                    Text(kb(a.size), fontSize = 12.sp, color = cs.onSurfaceVariant)
+                    Spacer(Modifier.weight(1f))
+                    Box(
+                        Modifier.size(32.dp).clip(CircleShape).clickable { atts.remove(a) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = "Usuń załącznik", tint = cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                    }
                 }
             }
-            OutlinedButton(enabled = !busy, onClick = { picker.launch(arrayOf("*/*")) }, modifier = Modifier.fillMaxWidth()) {
-                Text("Dodaj załącznik")
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(50))
+                    .background(cs.primary.copy(alpha = 0.10f))
+                    .clickable(enabled = !busy) { picker.launch(arrayOf("*/*")) }
+                    .padding(vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Filled.AttachFile, contentDescription = null, tint = cs.primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Dodaj załącznik", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = cs.primary)
             }
-            if (error.isNotEmpty()) Text(error, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+            if (error.isNotEmpty()) {
+                Text(
+                    error,
+                    fontSize = 13.sp,
+                    color = cs.error,
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(cs.error.copy(alpha = 0.10f)).padding(12.dp)
+                )
+            }
         }
     }
 
@@ -285,9 +362,51 @@ fun MailComposeScreen(
     }
 }
 
+@Composable
+private fun ComposeDivider() {
+    Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
+}
+
+/** Wiersz karty: etykieta po lewej, pole bez ramki, opcjonalny element po prawej. */
+@Composable
+private fun FieldRow(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    keyboard: KeyboardType = KeyboardType.Text,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 14.sp, color = cs.onSurfaceVariant, modifier = Modifier.width(52.dp))
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            singleLine = true,
+            textStyle = TextStyle(fontSize = 15.sp, color = cs.onSurface),
+            cursorBrush = SolidColor(cs.primary),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboard),
+            modifier = Modifier.weight(1f).padding(vertical = 12.dp)
+        )
+        if (trailing != null) {
+            Spacer(Modifier.width(8.dp))
+            trailing()
+        }
+    }
+}
+
 /** Pole adresata z podpowiedziami z historii poczty (wg fragmentu po ostatnim przecinku). */
 @Composable
-private fun RecipientField(label: String, value: String, onChange: (String) -> Unit, contacts: List<MailContact>) {
+private fun RecipientRow(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    contacts: List<MailContact>,
+    trailing: (@Composable () -> Unit)? = null
+) {
     val cs = MaterialTheme.colorScheme
     val cut = maxOf(value.lastIndexOf(','), value.lastIndexOf(';'))
     val prefix = if (cut >= 0) value.substring(0, cut + 1) + " " else ""
@@ -298,20 +417,35 @@ private fun RecipientField(label: String, value: String, onChange: (String) -> U
         .sortedByDescending { it.count }
         .take(4)
     Column {
-        LabeledField(label, value, onChange, keyboard = KeyboardType.Email)
+        FieldRow(label, value, onChange, KeyboardType.Email, trailing)
         hits.forEach { h ->
-            Column(
-                Modifier.fillMaxWidth().clickable { onChange(prefix + h.email + ", ") }.padding(horizontal = 4.dp, vertical = 6.dp)
+            Row(
+                Modifier.fillMaxWidth().clickable { onChange(prefix + h.email + ", ") }.padding(horizontal = 14.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    h.name.ifBlank { h.email },
-                    fontSize = 14.sp,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = cs.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                if (h.name.isNotBlank()) Text(h.email, fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Box(
+                    Modifier.size(30.dp).clip(CircleShape).background(cs.primary.copy(alpha = 0.12f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        (h.name.ifBlank { h.email }).firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = cs.primary
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        h.name.ifBlank { h.email },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = cs.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (h.name.isNotBlank()) Text(h.email, fontSize = 12.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }

@@ -62,6 +62,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -104,7 +117,8 @@ data class MailRow(
     val snippet: String,
     val time: Long,
     val unread: Boolean,
-    val count: Int
+    val count: Int,
+    val hasAtt: Boolean = false
 )
 
 data class MailAttachment(val messageId: String, val attachmentId: String, val name: String, val mime: String, val size: Long)
@@ -140,7 +154,8 @@ private suspend fun <T> com.google.android.gms.tasks.Task<T>.awaitMail(): T = su
 }
 
 object GmailApi {
-    const val SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+    /** Pełny dostęp do Gmaila: tylko on pozwala trwale usuwać wiadomości (opróżnianie kosza). Obejmuje też gmail.modify. */
+    const val SCOPE = "https://mail.google.com/"
     private const val API = "https://gmail.googleapis.com/gmail/v1/users/me"
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -178,10 +193,11 @@ object GmailApi {
         }
     }
 
-    fun listThreads(token: String, label: String, pageToken: String?): Pair<List<String>, String?> {
+    fun listThreads(token: String, label: String, pageToken: String?, query: String = ""): Pair<List<String>, String?> {
         val u = "$API/threads".toHttpUrl().newBuilder()
             .addQueryParameter("maxResults", "20")
             .addQueryParameter("labelIds", label)
+        if (query.isNotBlank()) u.addQueryParameter("q", query)
         if (label == "TRASH") u.addQueryParameter("includeSpamTrash", "true")
         if (!pageToken.isNullOrEmpty()) u.addQueryParameter("pageToken", pageToken)
         val j = JSONObject(exec(token, Request.Builder().url(u.build())))
@@ -221,6 +237,10 @@ object GmailApi {
         val who = senderName(header(last.optJSONObject("payload"), if (outgoing) "To" else "From"))
         val subject = header(first.optJSONObject("payload"), "Subject").ifBlank { "(bez tematu)" }
         val unread = (0 until ms.length()).any { "UNREAD" in labelsOf(ms.getJSONObject(it)) }
+        // W formacie metadata nie ma części, ale typ główny multipart/mixed oznacza załączniki.
+        val hasAtt = (0 until ms.length()).any {
+            ms.getJSONObject(it).optJSONObject("payload")?.optString("mimeType").orEmpty().startsWith("multipart/mixed")
+        }
         return MailRow(
             id = id,
             who = who,
@@ -228,7 +248,8 @@ object GmailApi {
             snippet = unescapeHtml(last.optString("snippet")),
             time = last.optString("internalDate").toLongOrNull() ?: 0L,
             unread = unread,
-            count = ms.length()
+            count = ms.length(),
+            hasAtt = hasAtt
         )
     }
 
@@ -408,6 +429,25 @@ object GmailApi {
     fun trash(token: String, threadId: String) = post(token, "threads/$threadId/trash", "{}")
 
     fun untrash(token: String, threadId: String) = post(token, "threads/$threadId/untrash", "{}")
+
+    /** Trwale usuwa wszystko z kosza (partiami po 500 wiadomości). Zwraca liczbę usuniętych wiadomości. */
+    fun deleteAllTrash(token: String): Int {
+        var total = 0
+        repeat(40) {
+            val u = "$API/messages".toHttpUrl().newBuilder()
+                .addQueryParameter("labelIds", "TRASH")
+                .addQueryParameter("includeSpamTrash", "true")
+                .addQueryParameter("maxResults", "500")
+                .build()
+            val arr = JSONObject(exec(token, Request.Builder().url(u))).optJSONArray("messages") ?: JSONArray()
+            if (arr.length() == 0) return total
+            val ids = JSONArray()
+            for (i in 0 until arr.length()) ids.put(arr.getJSONObject(i).getString("id"))
+            post(token, "messages/batchDelete", JSONObject().put("ids", ids).toString())
+            total += arr.length()
+        }
+        return total
+    }
 }
 
 // ───────────────────────────── POMOCNICZE ─────────────────────────────
@@ -536,6 +576,9 @@ fun MailScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var token by remember { mutableStateOf<String?>(null) }
     var folder by remember { mutableStateOf("INBOX") }
+    var query by remember { mutableStateOf("") }
+    var onlyUnread by remember { mutableStateOf(false) }
+    var confirmEmpty by remember { mutableStateOf(false) }
     val rows = remember { mutableStateListOf<MailRow>() }
     var nextToken by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -571,6 +614,10 @@ fun MailScreen(onBack: () -> Unit) {
         catch (e: Exception) { }
     }
 
+    /** Zapytanie Gmaila: filtr nieprzeczytanych (tylko w Odebranych) plus wpisany tekst. */
+    fun searchQuery(): String =
+        listOfNotNull(if (onlyUnread && folder == "INBOX") "is:unread" else null, query.trim().ifBlank { null }).joinToString(" ")
+
     fun load(more: Boolean) {
         if (busy) return
         scope.launch {
@@ -578,9 +625,10 @@ fun MailScreen(onBack: () -> Unit) {
             status = ""
             try {
                 val label = folder
-                val (ids, next) = api { t -> GmailApi.listThreads(t, label, if (more) nextToken else null) }
+                val q = searchQuery()
+                val (ids, next) = api { t -> GmailApi.listThreads(t, label, if (more) nextToken else null, q) }
                 val fetched = api { t -> GmailApi.rows(t, ids, label) }
-                if (label == folder) {
+                if (label == folder && q == searchQuery()) {
                     if (!more) rows.clear()
                     rows.addAll(fetched)
                     nextToken = next
@@ -660,6 +708,24 @@ fun MailScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         File(ctx.cacheDir, "mail").deleteRecursively()
         connect()
+    }
+
+    fun emptyTrash() {
+        scope.launch {
+            busy = true
+            status = ""
+            try {
+                api { t -> GmailApi.deleteAllTrash(t) }
+                rows.clear()
+                nextToken = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                status = "Nie udało się opróżnić kosza: " + (e.message ?: e.javaClass.simpleName)
+            } finally {
+                busy = false
+            }
+        }
     }
 
     fun openThread(id: String) {
@@ -838,23 +904,46 @@ fun MailScreen(onBack: () -> Unit) {
         Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
             Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp).verticalScroll(rememberScrollState(), enabled = false),
+                Modifier.fillMaxWidth().padding(top = 8.dp).horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FOLDERS.forEach { (id, name) ->
-                    FilterChip(
-                        selected = folder == id,
-                        onClick = {
-                            if (folder != id && token != null) {
-                                folder = id
-                                selected.clear()
-                                rows.clear()
-                                nextToken = null
-                                load(false)
-                            }
-                        },
-                        label = { Text(name) }
-                    )
+                    PillChip(name, folder == id) {
+                        if (folder != id && token != null) {
+                            folder = id
+                            selected.clear()
+                            rows.clear()
+                            nextToken = null
+                            load(false)
+                        }
+                    }
+                }
+            }
+            if (token != null) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    MailSearchField(query, { query = it }, { load(false) }, Modifier.weight(1f))
+                    if (folder == "INBOX") {
+                        PillChip("Nieprzeczytane", onlyUnread) {
+                            onlyUnread = !onlyUnread
+                            selected.clear()
+                            rows.clear()
+                            nextToken = null
+                            load(false)
+                        }
+                    }
+                }
+            }
+            if (folder == "TRASH" && rows.isNotEmpty() && query.isBlank()) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(enabled = !busy, onClick = { confirmEmpty = true }) {
+                        Icon(Icons.Filled.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Opróżnij kosz", color = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
             if (needsConnect) {
@@ -871,7 +960,7 @@ fun MailScreen(onBack: () -> Unit) {
             }
             if (busy && rows.isEmpty()) SubText("Wczytywanie…", Modifier.padding(top = 16.dp))
             if (!busy && !needsConnect && status.isEmpty() && rows.isEmpty() && token != null) {
-                SubText("Brak wiadomości w tym folderze.", Modifier.padding(top = 16.dp))
+                SubText(if (searchQuery().isNotEmpty()) "Brak wyników." else "Brak wiadomości w tym folderze.", Modifier.padding(top = 16.dp))
             }
             LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
                 items(rows, key = { it.id }) { r ->
@@ -914,42 +1003,132 @@ fun MailScreen(onBack: () -> Unit) {
         }
         }
     }
+
+    if (confirmEmpty) {
+        AlertDialog(
+            onDismissRequest = { confirmEmpty = false },
+            title = { Text("Opróżnić kosz?") },
+            text = { Text("Wszystkie wiadomości z kosza zostaną usunięte na stałe. Tego nie da się cofnąć.") },
+            confirmButton = { TextButton(onClick = { confirmEmpty = false; emptyTrash() }) { Text("Usuń na stałe") } },
+            dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text("Anuluj") } }
+        )
+    }
 }
+
+@Composable
+private fun PillChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) cs.primary else cs.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 14.sp,
+            maxLines = 1,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) cs.onPrimary else cs.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun MailSearchField(value: String, onChange: (String) -> Unit, onSearch: () -> Unit, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    val focus = LocalFocusManager.current
+    val shape = RoundedCornerShape(50)
+    Row(
+        modifier.clip(shape).background(cs.surface).border(1.dp, cs.outlineVariant, shape).padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.weight(1f)) {
+            if (value.isEmpty()) Text("Szukaj", fontSize = 15.sp, color = cs.onSurfaceVariant)
+            BasicTextField(
+                value = value,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = TextStyle(fontSize = 15.sp, color = cs.onSurface),
+                cursorBrush = SolidColor(cs.primary),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focus.clearFocus(); onSearch() }),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        if (value.isNotEmpty()) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Wyczyść",
+                tint = cs.onSurfaceVariant,
+                modifier = Modifier.size(20.dp).clickable { onChange(""); onSearch() }
+            )
+        }
+    }
+}
+
+private val AVATAR_COLORS = listOf(0xFF2563EB, 0xFF0D9488, 0xFFD97706, 0xFFDB2777, 0xFF7C3AED, 0xFF16A34A).map { Color(it) }
+
+private fun avatarColor(s: String): Color = AVATAR_COLORS[(s.lowercase().hashCode() and 0x7fffffff) % AVATAR_COLORS.size]
 
 @Composable
 private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
+    val ac = avatarColor(r.who)
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = onClick, onLongClick = onLongClick) {
         Row(
-            Modifier.background(if (selected) cs.primary.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Transparent)
-                .padding(14.dp),
+            Modifier.background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.Top
         ) {
-            if (selected) {
-                Box(Modifier.size(18.dp).clip(CircleShape).background(cs.primary), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Check, contentDescription = "Zaznaczono", tint = cs.onPrimary, modifier = Modifier.size(13.dp))
-                }
-                Spacer(Modifier.width(2.dp))
-            } else {
+            Box(Modifier.size(40.dp)) {
                 Box(
-                    Modifier.size(10.dp).padding(top = 0.dp).clip(CircleShape)
-                        .background(if (r.unread) cs.primary else androidx.compose.ui.graphics.Color.Transparent)
-                )
+                    Modifier.fillMaxSize().clip(CircleShape).background(if (selected) cs.primary else ac.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (selected) {
+                        Icon(Icons.Filled.Check, contentDescription = "Zaznaczono", tint = cs.onPrimary, modifier = Modifier.size(22.dp))
+                    } else {
+                        Text(
+                            r.who.firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?",
+                            fontWeight = FontWeight.Bold,
+                            color = ac
+                        )
+                    }
+                }
+                if (r.unread && !selected) {
+                    Box(
+                        Modifier.align(Alignment.TopEnd).size(11.dp).clip(CircleShape).background(cs.primary)
+                            .border(2.dp, cs.surface, CircleShape)
+                    )
+                }
             }
-            Spacer(Modifier.width(if (selected) 6.dp else 10.dp))
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         r.who.ifBlank { "—" },
                         modifier = Modifier.weight(1f),
-                        fontWeight = if (r.unread) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontWeight = if (r.unread) FontWeight.ExtraBold else FontWeight.Normal,
                         fontSize = 15.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = cs.onSurface
                     )
+                    if (r.hasAtt) {
+                        Icon(Icons.Filled.AttachFile, contentDescription = "Załącznik", tint = cs.onSurfaceVariant, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(6.dp))
+                    }
                     if (r.count > 1) SubText("${r.count}  ")
-                    SubText(if (loading) "…" else mailTime(r.time))
+                    Text(
+                        if (loading) "…" else mailTime(r.time),
+                        fontSize = 12.sp,
+                        fontWeight = if (r.unread) FontWeight.Bold else FontWeight.Normal,
+                        color = if (r.unread) cs.primary else cs.onSurfaceVariant
+                    )
                 }
                 Text(
                     r.subject,
