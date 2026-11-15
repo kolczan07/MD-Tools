@@ -2,6 +2,8 @@ package pl.mdinstal.narzedzia
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,7 +26,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import android.content.Intent
@@ -99,8 +100,19 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
                 Text("Panel techniczny", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = cs.onBackground)
                 Text("Narzędzia i serwis", fontSize = 14.sp, color = cs.onSurfaceVariant)
             }
-            IconButton(onClick = { onOpen(Screen.Settings) }) {
-                Icon(Icons.Filled.Settings, contentDescription = "Ustawienia", tint = cs.primary)
+            // Kafelek Ustawienia: zębatka nad napisem, mniejszy niż kafelki narzędzi.
+            Column(
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(cs.surface)
+                    .border(1.dp, cs.outlineVariant, RoundedCornerShape(12.dp))
+                    .clickable { onOpen(Screen.Settings) }
+                    .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Icon(Icons.Filled.Settings, contentDescription = null, tint = cs.primary, modifier = Modifier.size(26.dp))
+                Text("Ustawienia", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
             }
         }
 
