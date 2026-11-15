@@ -19,6 +19,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -116,7 +119,9 @@ private class Detail(
     val warning: Boolean,
     val params: List<Param>,
     val current: Map<String, Any?>,
-    val desired: Map<String, Any?>
+    val desired: Map<String, Any?>,
+    /** Wszystkie pola z odpowiedzi heatPumps/{id} (spłaszczone), do okna z danymi użytkownika. */
+    val info: List<Pair<String, String>> = emptyList()
 )
 
 private fun JSONObject.s(k: String): String = if (isNull(k)) "" else optString(k)
@@ -177,7 +182,8 @@ private fun loadDetail(p: Pump, token: String): Detail {
         warning = sd?.optBoolean("warning") ?: false,
         params = params,
         current = toMap(st.optJSONObject("currentState")),
-        desired = toMap(st.optJSONObject("desiredState"))
+        desired = toMap(st.optJSONObject("desiredState")),
+        info = flattenInfo(hp)
     )
 }
 
@@ -880,6 +886,106 @@ private fun kw(v: Any?, p: Param?): Double? {
     return if (p != null && p.units.trim().equals("W", ignoreCase = true)) n / 1000.0 else n
 }
 
+/** Spłaszcza JSON do par ścieżka -> tekst, pomijając puste wartości. */
+private fun flattenJson(o: Any?, prefix: String, out: MutableList<Pair<String, String>>) {
+    when (o) {
+        null, JSONObject.NULL -> {}
+        is JSONObject -> {
+            val it = o.keys()
+            while (it.hasNext()) {
+                val k = it.next()
+                flattenJson(o.opt(k), if (prefix.isEmpty()) k else "$prefix.$k", out)
+            }
+        }
+        is org.json.JSONArray -> for (i in 0 until o.length()) flattenJson(o.opt(i), "$prefix[$i]", out)
+        else -> {
+            val t = o.toString()
+            if (t.isNotBlank()) out.add(prefix to t)
+        }
+    }
+}
+
+private fun flattenInfo(hp: JSONObject): List<Pair<String, String>> {
+    val out = ArrayList<Pair<String, String>>()
+    flattenJson(hp, "", out)
+    return out
+}
+
+private val PERSONAL_KEY = Regex("owner|user|customer|client|e-?mail|phone|tel|name|address|street|city|postal|zip|country|partner|installer|location|company|registered", RegexOption.IGNORE_CASE)
+
+private fun infoLabel(path: String): String = when (path.substringAfterLast('.').lowercase()) {
+    "owneremail", "email", "useremail" -> "E-mail"
+    "ownername", "username", "fullname" -> "Imię i nazwisko"
+    "firstname", "ownerfirstname" -> "Imię"
+    "lastname", "ownerlastname", "surname" -> "Nazwisko"
+    "phone", "phonenumber", "ownerphone", "mobile" -> "Telefon"
+    "street", "address", "addressline1", "owneraddress" -> "Adres"
+    "city", "town" -> "Miasto"
+    "postalcode", "zipcode", "zip", "postcode" -> "Kod pocztowy"
+    "country" -> "Kraj"
+    "partnername" -> "Partner"
+    "registeredat" -> "Zarejestrowano"
+    "customname" -> "Nazwa własna"
+    "serialno" -> "Numer seryjny"
+    "model" -> "Model"
+    else -> path
+}
+
+/** Okno z danymi właściciela pompy: pola osobowe na górze, reszta odpowiedzi API pod nimi. */
+@Composable
+private fun UserInfoDialog(pump: Pump, d: Detail, onDismiss: () -> Unit) {
+    val base = ArrayList<Pair<String, String>>()
+    base.add("Numer seryjny" to pump.serial)
+    if (pump.model.isNotBlank()) base.add("Model" to pump.model)
+    if (pump.partner.isNotBlank()) base.add("Partner" to pump.partner)
+    if (pump.since.isNotBlank()) base.add("Zarejestrowano" to pump.since)
+    if (pump.email.isNotBlank()) base.add("E-mail" to pump.email)
+    // Pola z API, których nie mamy jeszcze w podstawowych (po etykiecie i wartości).
+    val have = base.map { it.second }.toSet()
+    val api = d.info.filter { it.second !in have }
+    val (personal, rest) = api.partition { PERSONAL_KEY.containsMatchIn(it.first) }
+    @Composable
+    fun rows(list: List<Pair<String, String>>) {
+        list.forEach { (k, v) ->
+            Column(Modifier.padding(bottom = 8.dp)) {
+                SubText(infoLabel(k))
+                Text(v, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Dane użytkownika") },
+        text = {
+            SelectionContainer {
+                Column(
+                    Modifier
+                        .heightIn(max = 460.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    rows(base)
+                    if (personal.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        rows(personal)
+                    }
+                    if (rest.isNotEmpty()) {
+                        Text(
+                            "POZOSTAŁE DANE POMPY",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            letterSpacing = 0.6.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 12.dp, bottom = 8.dp)
+                        )
+                        rows(rest)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Zamknij") } }
+    )
+}
+
 /** Karta na górze ekranu pompy, wzorowana na karcie „Pompa ciepła” z aplikacji Iglu Home Next. */
 @Composable
 private fun PumpSummaryCard(pump: Pump, d: Detail, current: Map<String, Any?>) {
@@ -927,6 +1033,8 @@ private fun PumpSummaryCard(pump: Pump, d: Detail, current: Map<String, Any?>) {
         else -> "Online"
     }
     val bad = d.alarm || d.warning
+    var showInfo by remember(pump.serial) { mutableStateOf(false) }
+    if (showInfo) UserInfoDialog(pump, d) { showInfo = false }
 
     AppCard(
         Modifier
@@ -958,6 +1066,7 @@ private fun PumpSummaryCard(pump: Pump, d: Detail, current: Map<String, Any?>) {
                 Modifier
                     .size(40.dp)
                     .clip(CircleShape)
+                    .clickable { showInfo = true }
                     .background(if (bad) cs.error.copy(alpha = 0.15f) else cs.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
