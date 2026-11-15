@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
@@ -541,6 +542,7 @@ fun MailScreen(onBack: () -> Unit) {
     val trusted = remember { mutableStateListOf<String>().apply { addAll(Prefs.trustedSenders(ctx)) } }
     var compose by remember { mutableStateOf<ComposeInit?>(null) }
     var contacts by remember { mutableStateOf(Prefs.mailContacts(ctx)) }
+    val selected = remember { mutableStateListOf<String>() }
 
     /** Wywołanie API z jednym ponowieniem po odświeżeniu wygasłego tokenu. */
     suspend fun <T> api(block: suspend (String) -> T): T = withContext(Dispatchers.IO) {
@@ -669,6 +671,53 @@ fun MailScreen(onBack: () -> Unit) {
         }
     }
 
+    /** Oznacza zaznaczone wątki jako przeczytane (tylko te, które są nieprzeczytane). */
+    fun markSelectedRead() {
+        val ids = selected.filter { id -> rows.any { it.id == id && it.unread } }
+        selected.clear()
+        if (ids.isEmpty()) return
+        scope.launch {
+            busy = true
+            var failed = 0
+            ids.forEach { id ->
+                try {
+                    api { tk -> GmailApi.markRead(tk, id) }
+                    val idx = rows.indexOfFirst { it.id == id }
+                    if (idx >= 0) rows[idx] = rows[idx].copy(unread = false)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failed++
+                }
+            }
+            if (failed > 0) status = "Nie udało się oznaczyć wiadomości: $failed"
+            busy = false
+        }
+    }
+
+    /** Przenosi zaznaczone wątki do kosza. */
+    fun trashSelected() {
+        val ids = selected.toList()
+        selected.clear()
+        if (ids.isEmpty()) return
+        scope.launch {
+            busy = true
+            var failed = 0
+            ids.forEach { id ->
+                try {
+                    api { tk -> GmailApi.trash(tk, id) }
+                    rows.removeAll { it.id == id }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    failed++
+                }
+            }
+            if (failed > 0) status = "Nie udało się usunąć wiadomości: $failed"
+            busy = false
+        }
+    }
+
     val comp = compose
     if (comp != null) {
         MailComposeScreen(
@@ -745,12 +794,29 @@ fun MailScreen(onBack: () -> Unit) {
         return
     }
 
+    val selecting = selected.isNotEmpty()
+    if (selecting) BackHandler { selected.clear() }
     AppScaffold(
-        "Poczta",
-        onBack,
+        if (selecting) "Zaznaczono: ${selected.size}" else "Poczta",
+        { if (selecting) selected.clear() else onBack() },
         actions = {
-            IconButton(enabled = token != null && !busy, onClick = { load(false) }) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Odśwież")
+            if (selecting) {
+                TextButton(onClick = {
+                    selected.clear()
+                    selected.addAll(rows.map { it.id })
+                }) { Text("Wszystkie") }
+                IconButton(enabled = !busy, onClick = { markSelectedRead() }) {
+                    Icon(Icons.Filled.Check, contentDescription = "Oznacz jako przeczytane")
+                }
+                if (folder != "TRASH") {
+                    IconButton(enabled = !busy, onClick = { trashSelected() }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Usuń")
+                    }
+                }
+            } else {
+                IconButton(enabled = token != null && !busy, onClick = { load(false) }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Odśwież")
+                }
             }
         }
     ) { pad ->
@@ -766,6 +832,7 @@ fun MailScreen(onBack: () -> Unit) {
                         onClick = {
                             if (folder != id && token != null) {
                                 folder = id
+                                selected.clear()
                                 rows.clear()
                                 nextToken = null
                                 load(false)
@@ -793,7 +860,17 @@ fun MailScreen(onBack: () -> Unit) {
             }
             LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
                 items(rows, key = { it.id }) { r ->
-                    MailRowCard(r, loading = openingId == r.id, onClick = { if (openingId == null) openThread(r.id) })
+                    MailRowCard(
+                        r,
+                        loading = openingId == r.id,
+                        selected = r.id in selected,
+                        onClick = {
+                            if (selecting) {
+                                if (r.id in selected) selected.remove(r.id) else selected.add(r.id)
+                            } else if (openingId == null) openThread(r.id)
+                        },
+                        onLongClick = { if (r.id !in selected) selected.add(r.id) }
+                    )
                 }
                 if (nextToken != null) {
                     item {
@@ -825,15 +902,26 @@ fun MailScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun MailRowCard(r: MailRow, loading: Boolean, onClick: () -> Unit) {
+private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = onClick) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.Top) {
-            Box(
-                Modifier.size(10.dp).padding(top = 0.dp).clip(CircleShape)
-                    .background(if (r.unread) cs.primary else androidx.compose.ui.graphics.Color.Transparent)
-            )
-            Spacer(Modifier.width(10.dp))
+    AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = onClick, onLongClick = onLongClick) {
+        Row(
+            Modifier.background(if (selected) cs.primary.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Transparent)
+                .padding(14.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            if (selected) {
+                Box(Modifier.size(18.dp).clip(CircleShape).background(cs.primary), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Check, contentDescription = "Zaznaczono", tint = cs.onPrimary, modifier = Modifier.size(13.dp))
+                }
+                Spacer(Modifier.width(2.dp))
+            } else {
+                Box(
+                    Modifier.size(10.dp).padding(top = 0.dp).clip(CircleShape)
+                        .background(if (r.unread) cs.primary else androidx.compose.ui.graphics.Color.Transparent)
+                )
+            }
+            Spacer(Modifier.width(if (selected) 6.dp else 10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
