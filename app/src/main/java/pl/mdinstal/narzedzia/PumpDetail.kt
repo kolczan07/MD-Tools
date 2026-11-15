@@ -17,6 +17,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
@@ -37,6 +39,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Thermostat
+import androidx.compose.material.icons.outlined.WaterDrop
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -60,7 +68,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -674,11 +686,12 @@ private fun DetailBody(
         else groups.firstOrNull { it.first == active }?.second.orEmpty()
 
     LazyColumn(Modifier.fillMaxSize()) {
+        item { PumpSummaryCard(pump, d, current) }
         item {
             AppCard(
                 Modifier
                     .fillMaxWidth()
-                    .padding(top = 12.dp, bottom = 8.dp)
+                    .padding(bottom = 8.dp)
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -690,8 +703,8 @@ private fun DetailBody(
                         )
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(d.title, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
-                            SubText("${pump.serial} · ${pump.model}")
+                            Text(pump.serial, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface)
+                            SubText(pump.model)
                         }
                         StatusPill(pump.status, pump.online)
                     }
@@ -732,36 +745,6 @@ private fun DetailBody(
                     ) {
                         Button(enabled = !loading, onClick = onRefresh) { Text(if (loading) "Odświeżanie…" else "Odśwież") }
                         TextButton(onClick = onOpenPortal) { Text("Otwórz w portalu") }
-                    }
-                }
-            }
-        }
-        // Dwa najważniejsze odczyty na wierzchu: temperatura wewnątrz (IndoorT) i temperatura CWU (BoilerT).
-        item {
-            val tiles = listOf("IndoorT" to "Temperatura wewnątrz", "BoilerT" to "Temperatura CWU").mapNotNull { (k, label) ->
-                val par = d.params.firstOrNull { it.keyword == k }
-                val v = current[k]
-                when {
-                    par != null -> Triple(label, k, valueText(v, par) + if (v != null && par.units.isNotBlank()) " " + par.units else "")
-                    v != null -> Triple(label, k, v.toString())
-                    else -> null
-                }
-            }
-            if (tiles.isNotEmpty()) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    tiles.forEach { (label, key, text) ->
-                        AppCard(Modifier.weight(1f)) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                SubText(label)
-                                Text(text, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
-                                SubText(key)
-                            }
-                        }
                     }
                 }
             }
@@ -876,6 +859,137 @@ private fun DetailBody(
         if (!liveMode) items(shown, key = { "p_" + it.keyword }) { p ->
             val editable = editMode && canEdit(p)
             FieldRow(p, current[p.keyword], d.desired[p.keyword], editable, locked = editMode && p.access == "RW" && !editable) { onEdit(p) }
+        }
+    }
+}
+
+/** Pierwszy z listy kluczy, który ma wartość w stanie pompy (bez rozróżniania wielkości liter). */
+private fun pickKey(current: Map<String, Any?>, vararg keys: String): String? {
+    for (k in keys) {
+        val hit = current.keys.firstOrNull { it.equals(k, ignoreCase = true) && current[it] != null }
+        if (hit != null) return hit
+    }
+    return null
+}
+
+private fun numOf(v: Any?): Double? = (v as? Number)?.toDouble() ?: v?.toString()?.replace(',', '.')?.toDoubleOrNull()
+
+/** Moc w kW: jeśli parametr ma jednostkę W, dzielimy przez 1000. */
+private fun kw(v: Any?, p: Param?): Double? {
+    val n = numOf(v) ?: return null
+    return if (p != null && p.units.trim().equals("W", ignoreCase = true)) n / 1000.0 else n
+}
+
+/** Karta na górze ekranu pompy, wzorowana na karcie „Pompa ciepła” z aplikacji Iglu Home Next. */
+@Composable
+private fun PumpSummaryCard(pump: Pump, d: Detail, current: Map<String, Any?>) {
+    val cs = MaterialTheme.colorScheme
+    fun par(k: String?) = d.params.firstOrNull { it.keyword == k }
+    fun temp(k: String?): String {
+        val v = k?.let { current[it] }
+        val n = numOf(v) ?: return "—"
+        return String.format(Locale.US, "%.1f", n) + " °C"
+    }
+
+    val roomKey = pickKey(current, "IndoorT")
+    val waterKey = pickKey(current, "BoilerT", "HeatingSupplyT", "SupplyT", "OutletT", "WaterOutT")
+    val usedKey = pickKey(current, "PowerElectricity")
+    val prodKey = pickKey(current, "PowerHeating")
+    val copKey = pickKey(current, "COP")
+    val used = usedKey?.let { kw(current[it], par(it)) }
+    val prod = prodKey?.let { kw(current[it], par(it)) }
+    val cop = copKey?.let { numOf(current[it]) } ?: if (used != null && prod != null && used > 0.01) prod / used else null
+    // Status wg flag żądań: najpierw pojawia się żądanie (woda/ogrzewanie), potem ruszają pompy obiegowe i sprężarka;
+    // przy wyłączaniu flaga gaśnie pierwsza. Brak żądania = w gotowości (pompa buforowa pracuje cały czas, więc nie jest wskaźnikiem).
+    fun on(k: String): Boolean {
+        val v = current.entries.firstOrNull { it.key.equals(k, ignoreCase = true) }?.value
+        return v == true || (v is Number && v.toDouble() != 0.0)
+    }
+    val hasFlags = listOf("HotWaterRQ", "HeatingRQ", "CoolingRQ", "ActiveCoolingRQ", "HeaterRQ")
+        .any { k -> current.keys.any { it.equals(k, ignoreCase = true) } }
+    val status = when {
+        !pump.online -> "Offline"
+        on("HotWaterRQ") -> "Przygotowanie ciepłej wody"
+        on("HeatingRQ") -> "Ogrzewanie"
+        on("ActiveCoolingRQ") || on("CoolingRQ") -> "Chłodzenie"
+        on("HeaterRQ") -> "Grzałka"
+        hasFlags -> "W gotowości"
+        else -> "Online"
+    }
+    val bad = d.alarm || d.warning
+
+    AppCard(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp, bottom = 8.dp)
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(cs.primary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) { Icon(Icons.Outlined.Thermostat, null, tint = cs.primary, modifier = Modifier.size(26.dp)) }
+            Spacer(Modifier.width(14.dp))
+            Text(
+                buildAnnotatedString {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append("POMPA CIEPŁA ") }
+                    append(d.title)
+                },
+                fontSize = 19.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = cs.onSurface,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(if (bad) cs.error.copy(alpha = 0.15f) else cs.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Outlined.ErrorOutline, null, tint = if (bad) cs.error else cs.onSurfaceVariant, modifier = Modifier.size(24.dp))
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+        Row(Modifier.height(IntrinsicSize.Min)) {
+            Column(Modifier.weight(1f).padding(horizontal = 18.dp, vertical = 18.dp)) {
+                Icon(Icons.Outlined.Home, null, tint = cs.primary, modifier = Modifier.size(38.dp))
+                Spacer(Modifier.height(14.dp))
+                Text(temp(roomKey), fontSize = 32.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
+                Text("Temperatura ogólna", fontSize = 15.sp, color = cs.onSurface)
+                SubText(roomKey ?: "brak odczytu", Modifier.padding(top = 2.dp))
+            }
+            Box(Modifier.fillMaxHeight().width(1.dp).background(cs.outlineVariant))
+            Column(Modifier.weight(1f).padding(horizontal = 18.dp, vertical = 18.dp)) {
+                Icon(Icons.Outlined.WaterDrop, null, tint = cs.primary, modifier = Modifier.size(38.dp))
+                Spacer(Modifier.height(14.dp))
+                Text(temp(waterKey), fontSize = 32.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
+                Text("Temperatura wody", fontSize = 15.sp, color = cs.onSurface)
+                SubText(waterKey ?: "brak odczytu", Modifier.padding(top = 2.dp))
+            }
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(cs.outlineVariant))
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            @Composable
+            fun stat(label: String, value: String, w: Float) {
+                Column(Modifier.weight(w)) {
+                    Text(label, fontSize = 14.sp, color = cs.onSurface)
+                    Text(value, fontSize = 18.sp, fontWeight = FontWeight.Medium, color = cs.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            stat("COP", cop?.let { String.format(Locale.US, "%.2f", it) } ?: "—", 0.8f)
+            stat("Używając", used?.let { String.format(Locale.US, "%.2f kW", it) } ?: "—", 1.15f)
+            stat("Produkując", prod?.let { String.format(Locale.US, "%.2f kW", it) } ?: "—", 1.2f)
+            stat("Status", status, 1.35f)
         }
     }
 }
