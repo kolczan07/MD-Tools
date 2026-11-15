@@ -970,7 +970,13 @@ private fun PumpSummaryCard(pump: Pump, d: Detail, current: Map<String, Any?>) {
                 Icon(Icons.Outlined.Home, null, tint = cs.primary, modifier = Modifier.size(38.dp))
                 Spacer(Modifier.height(14.dp))
                 Text(temp(roomKey), fontSize = 32.sp, fontWeight = FontWeight.Medium, color = cs.onSurface)
-                Text("Temperatura ogólna", fontSize = 15.sp, color = cs.onSurface)
+                val roomLabel = when (roomKey) {
+                    "BufferT" -> "Bufor"
+                    "WaterOutT" -> "Zasilanie"
+                    "IndoorT" -> "Wewnątrz"
+                    else -> "Temperatura ogólna"
+                }
+                Text(roomLabel, fontSize = 15.sp, color = cs.onSurface)
                 SubText(roomKey ?: "brak odczytu", Modifier.padding(top = 2.dp))
             }
             Box(Modifier.fillMaxHeight().width(1.dp).background(cs.outlineVariant))
