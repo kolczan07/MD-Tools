@@ -82,6 +82,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import java.net.ConnectException
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.PortUnreachableException
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -483,7 +486,8 @@ private fun WifiGroupRow(g: WifiGroup, color: Color, showBand: Boolean, expanded
                     SubText(
                         "Kanał: ${g.channels}" +
                             (if (showBand) " • ${g.band.label}" else "") +
-                            (if (g.connected) " • połączono" else "")
+                            (if (g.connected) " • połączono" else "") +
+                            (if (g.nets.size == 1 && g.nets[0].bssid.isNotEmpty()) "\n${g.nets[0].bssid.uppercase()}" else "")
                     )
                 }
                 Text("${g.best} dBm", fontWeight = FontWeight.Bold, color = levelColor(strengthOf(g.best)))
@@ -580,7 +584,8 @@ fun WifiScreen(onBack: () -> Unit) {
         nets.map { it.ssid }.distinct().sorted().withIndex()
             .associate { (i, s) -> s to SSID_COLORS[i % SSID_COLORS.size] }
     }
-    val groups = nets.groupBy { it.ssid to it.band }.map { (k, v) -> WifiGroup(k.first, k.second, v) }
+    // Każdy nadajnik (BSSID) jako osobny wiersz — kilka AP z tym samym SSID nie może się zlewać w jeden.
+    val groups = nets.map { WifiGroup(it.ssid, it.band, listOf(it)) }
     val counts = WifiBand.values().associateWith { b -> groups.count { it.band == b } }
     val connBand = conn?.let { bandOf(it.freq) }
     val specBand = filter ?: connBand ?: WifiBand.B24
@@ -657,8 +662,8 @@ fun WifiScreen(onBack: () -> Unit) {
                         modifier = Modifier.weight(1f).padding(top = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(shown, key = { "${it.ssid}|${it.band}" }) { g ->
-                            val key = "${g.ssid}|${g.band}"
+                        items(shown, key = { g -> g.nets.first().bssid.ifEmpty { "${g.ssid}|${g.band}|${g.nets.first().freq}" } }) { g ->
+                            val key = g.nets.first().bssid.ifEmpty { "${g.ssid}|${g.band}|${g.nets.first().freq}" }
                             WifiGroupRow(
                                 g = g,
                                 color = colors[g.ssid] ?: Color.Gray,
@@ -705,7 +710,31 @@ private data class LanHost(
 private enum class TcpProbe { OPEN, REFUSED, NONE }
 
 // porty istotne dla instalatora: SSH, telnet, DNS, WWW, SMB, Modbus TCP, MQTT, HA, alt-HTTP
-private val LAN_PORTS = intArrayOf(22, 23, 53, 80, 443, 445, 502, 1883, 8080, 8123, 8443)
+private val LAN_PORTS = intArrayOf(
+    21, 22, 23, 53, 80, 81, 135, 139, 443, 445, 502, 554, 631, 1883, 3389, 5000, 5555, 7547,
+    8000, 8001, 8009, 8080, 8081, 8123, 8443, 8883, 9000, 9100, 37777, 62078
+)
+
+// Zapytania UDP: odpowiedź albo ICMP „port unreachable” oznaczają, że urządzenie żyje (także gdy nie ma otwartych portów TCP).
+private val UDP_NBNS: ByteArray = byteArrayOf(0x13, 0x37, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x20, 0x43, 0x4B) +
+    ByteArray(30) { 0x41 } + byteArrayOf(0, 0, 0x21, 0, 1)
+private val UDP_MDNS: ByteArray = byteArrayOf(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0) +
+    byteArrayOf(9) + "_services".toByteArray() + byteArrayOf(7) + "_dns-sd".toByteArray() +
+    byteArrayOf(4) + "_udp".toByteArray() + byteArrayOf(5) + "local".toByteArray() + byteArrayOf(0, 0, 12, 0x80.toByte(), 1)
+
+private fun udpProbe(ip: String, port: Int, payload: ByteArray, timeoutMs: Int): Boolean = try {
+    DatagramSocket().use { s ->
+        s.soTimeout = timeoutMs
+        s.connect(InetSocketAddress(ip, port))
+        s.send(DatagramPacket(payload, payload.size))
+        s.receive(DatagramPacket(ByteArray(512), 512))
+        true
+    }
+} catch (e: PortUnreachableException) {
+    true
+} catch (e: Exception) {
+    false
+}
 
 private fun ipToLong(ip: String): Long = ip.split(".").fold(0L) { a, p -> (a shl 8) or (p.toLong() and 0xFF) }
 
@@ -764,10 +793,15 @@ private fun tcpProbe(ip: String, port: Int, timeoutMs: Int): TcpProbe = try {
 
 private suspend fun scanHost(ip: String, sem: Semaphore): LanHost? = coroutineScope {
     val reach = async {
-        sem.withPermit { try { InetAddress.getByName(ip).isReachable(300) } catch (e: Exception) { false } }
+        sem.withPermit { try { InetAddress.getByName(ip).isReachable(800) } catch (e: Exception) { false } }
     }
-    val probes = LAN_PORTS.map { p -> async { sem.withPermit { p to tcpProbe(ip, p, 200) } } }.awaitAll()
-    val alive = reach.await() || probes.any { it.second != TcpProbe.NONE }
+    val udp = listOf(
+        async { sem.withPermit { udpProbe(ip, 5353, UDP_MDNS, 700) } },
+        async { sem.withPermit { udpProbe(ip, 137, UDP_NBNS, 700) } },
+        async { sem.withPermit { udpProbe(ip, 40125, byteArrayOf(0), 700) } }
+    )
+    val probes = LAN_PORTS.map { p -> async { sem.withPermit { p to tcpProbe(ip, p, 600) } } }.awaitAll()
+    val alive = reach.await() || udp.awaitAll().any { it } || probes.any { it.second != TcpProbe.NONE }
     if (!alive) return@coroutineScope null
     val open = probes.filter { it.second == TcpProbe.OPEN }.map { it.first }
     val nameJob = async(Dispatchers.IO) {
@@ -853,15 +887,21 @@ fun LanScreen(onBack: () -> Unit) {
         total = ips.size
         scanning = true
         job = scope.launch {
-            val sem = Semaphore(64)
+            val sem = Semaphore(128)
             try {
-                coroutineScope {
-                    ips.forEach { ip ->
-                        launch(Dispatchers.IO) {
-                            val h = if (ip == li.ip) LanHost(ip = ip, name = Build.MODEL, self = true) else scanHost(ip, sem)
-                            withContext(Dispatchers.Main) {
-                                if (h != null) hosts.add(h)
-                                done++
+                // Dwie rundy: pierwszy pakiet budzi uśpione urządzenia i wymusza rozwiązanie ARP,
+                // dopiero druga runda widzi je poprawnie. Drugą rundę skanujemy tylko dla brakujących adresów.
+                for (round in 1..2) {
+                    val targets = if (round == 1) ips else ips.filter { ip -> hosts.none { it.ip == ip } }
+                    if (round == 2) { total = done + targets.size }
+                    coroutineScope {
+                        targets.forEach { ip ->
+                            launch(Dispatchers.IO) {
+                                val h = if (ip == li.ip) LanHost(ip = ip, name = Build.MODEL, self = true) else scanHost(ip, sem)
+                                withContext(Dispatchers.Main) {
+                                    if (h != null && hosts.none { it.ip == h.ip }) hosts.add(h)
+                                    done++
+                                }
                             }
                         }
                     }
