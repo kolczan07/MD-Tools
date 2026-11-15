@@ -850,7 +850,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
                 viewing = null
             })
         } else {
-            AppScaffold("Asaj", onBack) { pad ->
+            AppScaffold("Asaj", onBack, onRefresh = { if (hasCreds && unlocked) reload() }, refreshing = busy) { pad ->
                 Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
                     when {
                         !hasCreds -> {

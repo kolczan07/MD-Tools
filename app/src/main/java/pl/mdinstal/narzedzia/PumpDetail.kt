@@ -569,7 +569,7 @@ fun PumpDetailScreen(pump: Pump, onBack: () -> Unit, onOpenPortal: () -> Unit) {
             }
         }
 
-        AppScaffold(pump.serial, onBack) { pad ->
+        AppScaffold(pump.serial, onBack, onRefresh = { reload++ }, refreshing = loading) { pad ->
             Column(
                 Modifier
                     .fillMaxSize()

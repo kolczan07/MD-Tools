@@ -217,7 +217,11 @@ fun WeatherScreen(onBack: () -> Unit) {
         if (has) locate() else launcher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
     }
 
-    AppScaffold("Pogoda", onBack) { pad ->
+    AppScaffold(
+        "Pogoda", onBack,
+        onRefresh = { if (manual) { if (cityInput.isNotBlank()) byCity() } else locate() },
+        refreshing = status.startsWith("Ładowanie") || status.startsWith("Szukam")
+    ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad).imePadding().padding(horizontal = 14.dp)) {
             if (status.isNotEmpty()) SubText(status, Modifier.padding(top = 12.dp))
             if (manual) {

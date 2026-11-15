@@ -880,6 +880,8 @@ fun MailScreen(onBack: () -> Unit) {
     AppScaffold(
         if (selecting) "Zaznaczono: ${selected.size}" else "Poczta",
         { if (selecting) selected.clear() else onBack() },
+        onRefresh = { if (token != null && !selecting) load(false) },
+        refreshing = busy,
         actions = {
             if (selecting) {
                 TextButton(onClick = {

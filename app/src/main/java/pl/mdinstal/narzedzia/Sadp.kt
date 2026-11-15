@@ -212,7 +212,7 @@ fun SadpScreen(onBack: () -> Unit) {
 
     val cs = MaterialTheme.colorScheme
     val activeCount = devices.count { it.activated }
-    AppScaffold("Kamery Hikvision", onBack) { pad ->
+    AppScaffold("Kamery Hikvision", onBack, onRefresh = { scan() }, refreshing = scanning) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CamStat(devices.size.toString(), "urządzeń", cs.onSurface, Modifier.weight(1f))

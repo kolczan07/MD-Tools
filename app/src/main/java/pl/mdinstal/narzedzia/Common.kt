@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -27,11 +29,23 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.TextStyle
@@ -48,6 +62,10 @@ fun AppScaffold(
     title: String,
     onBack: () -> Unit,
     actions: @Composable RowScope.() -> Unit = {},
+    /** Gdy podane, przeciągnięcie ekranu w dół wywołuje odświeżenie. Treść musi być przewijalna. */
+    onRefresh: (() -> Unit)? = null,
+    /** Czy odświeżanie jeszcze trwa (spinner zostaje, dopóki true). Bez tego spinner znika po chwili. */
+    refreshing: Boolean? = null,
     content: @Composable (PaddingValues) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
@@ -70,8 +88,39 @@ fun AppScaffold(
                 )
             )
         },
-        content = content
+        content = if (onRefresh == null) content else { pad ->
+            PullRefreshBox(pad, refreshing, onRefresh) { content(pad) }
+        }
     )
+}
+
+/** Przeciągnięcie w dół jak w innych aplikacjach: wywołuje onRefresh i pokazuje spinner pod paskiem tytułu. */
+@Composable
+private fun PullRefreshBox(
+    pad: PaddingValues,
+    refreshing: Boolean?,
+    onRefresh: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val state = rememberPullToRefreshState()
+    val refreshingNow by rememberUpdatedState(refreshing)
+    val onRefreshNow by rememberUpdatedState(onRefresh)
+    if (state.isRefreshing) {
+        LaunchedEffect(Unit) {
+            onRefreshNow()
+            delay(700)
+            // Gdy ekran podaje stan pracy, czekamy na jego koniec (najwyżej 60 s).
+            if (refreshingNow != null) withTimeoutOrNull(60_000) { snapshotFlow { refreshingNow }.first { it != true } }
+            state.endRefresh()
+        }
+    }
+    Box(Modifier.fillMaxSize().nestedScroll(state.nestedScrollConnection)) {
+        content()
+        PullToRefreshContainer(
+            state = state,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = pad.calculateTopPadding())
+        )
+    }
 }
 
 @Composable

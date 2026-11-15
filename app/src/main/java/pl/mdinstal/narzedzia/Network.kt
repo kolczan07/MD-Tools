@@ -604,7 +604,14 @@ fun WifiScreen(onBack: () -> Unit) {
             .minWithOrNull(compareBy<ChanHealth>({ it.load }, { it.count }))?.channel
     }
 
-    AppScaffold("Skaner WiFi", onBack) { pad ->
+    AppScaffold(
+        "Skaner WiFi", onBack,
+        onRefresh = {
+            try { @Suppress("DEPRECATION") wm.startScan() } catch (e: Exception) { }
+            nets = readWifi(wm)
+            conn = readConn(wm)
+        }
+    ) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
             if (!granted) {
                 SubText("Skaner potrzebuje uprawnienia do lokalizacji (wymóg Androida dla listy sieci Wi-Fi).", Modifier.padding(top = 16.dp))
@@ -914,7 +921,7 @@ fun LanScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) { startScan() }
 
-    AppScaffold("Skaner LAN", onBack) { pad ->
+    AppScaffold("Skaner LAN", onBack, onRefresh = { startScan() }, refreshing = scanning) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(horizontal = 16.dp)) {
             val li = info
             if (li == null) {

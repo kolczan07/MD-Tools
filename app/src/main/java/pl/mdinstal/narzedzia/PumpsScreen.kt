@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 internal val OnlineGreen = Color(0xFF16A34A)
@@ -70,6 +71,8 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
     /** 0 = wszystkie, 1 = online, 2 = offline. Ustawiane dotknięciem kafelka u góry; ponowne dotknięcie zdejmuje filtr. */
     var statusFilter by remember { mutableStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
+    var pullBusy by remember { mutableStateOf(false) }
+    val pullScope = androidx.compose.runtime.rememberCoroutineScope()
     var selected by remember { mutableStateOf<Pump?>(null) }
 
     // Lista jest zasilana z ekranu Iglutech, więc odświeżamy ją na bieżąco.
@@ -119,7 +122,30 @@ fun PumpsScreen(onBack: () -> Unit, onOpenIglutech: () -> Unit, onOpenPump: (Str
             onBack = { selected = null },
             onOpenPortal = { onOpenPump(sel.serial) }
         )
-    } else AppScaffold("Pompy ciepła", onBack) { pad ->
+    } else AppScaffold(
+        "Pompy ciepła", onBack,
+        onRefresh = {
+            // Odświeżenie listy z API, o ile jest ważny token z sesji portalu; inaczej podpowiedź.
+            val token = IgluToken.token
+            if (token == null || !IgluToken.valid()) {
+                android.widget.Toast.makeText(ctx, "Brak sesji portalu. Otwórz portal Iglutech, zaloguj się i wróć.", android.widget.Toast.LENGTH_LONG).show()
+            } else if (!pullBusy) {
+                pullScope.launch {
+                    pullBusy = true
+                    try {
+                        val json = withContext(Dispatchers.IO) { IgluApi.fetchPumps(token) }
+                        PumpStore.merge(ctx, json)
+                        pumps = PumpStore.load(ctx)
+                    } catch (e: Exception) {
+                        android.widget.Toast.makeText(ctx, "Nie udało się odświeżyć: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                    } finally {
+                        pullBusy = false
+                    }
+                }
+            }
+        },
+        refreshing = pullBusy
+    ) { pad ->
         Column(
             Modifier
                 .fillMaxSize()
