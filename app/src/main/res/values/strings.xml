@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">MD-Tools</string>
+    <string name="widget_weather_desc">Pogoda: temperatura teraz i prognoza na dziś</string>
+    <string name="widget_mail_desc">Poczta: liczba nieprzeczytanych wiadomości</string>
+    <string name="widget_pumps_desc">Pompy ciepła: online, offline i alarmy</string>
+    <string name="widget_shortcuts_desc">Skróty do narzędzi</string>
 </resources>

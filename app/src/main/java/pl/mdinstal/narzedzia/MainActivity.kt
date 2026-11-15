@@ -39,11 +39,13 @@ import kotlinx.coroutines.withContext
 class MainActivity : FragmentActivity() {
     private var themeMode by mutableStateOf("system")
     private var openMail by mutableStateOf(false)
+    private var openTarget by mutableStateOf<String?>(null)
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_OPEN_MAIL, false)) openMail = true
+        intent.getStringExtra(EXTRA_OPEN_SCREEN)?.let { openTarget = it }
     }
 
     override fun onStart() {
@@ -60,6 +62,7 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
         themeMode = Prefs.theme(this)
         if (intent?.getBooleanExtra(EXTRA_OPEN_MAIL, false) == true) openMail = true
+        intent?.getStringExtra(EXTRA_OPEN_SCREEN)?.let { openTarget = it }
         if (Prefs.mailNotify(this)) MailNotify.schedule(this)
         setContent {
             val dark = when (themeMode) {
@@ -74,7 +77,7 @@ class MainActivity : FragmentActivity() {
                 )
             }
             AppTheme(dark) {
-                App(openMail = openMail, onMailOpened = { openMail = false }, themeMode = themeMode, onTheme = { m ->
+                App(openMail = openMail, onMailOpened = { openMail = false }, openTarget = openTarget, onTargetOpened = { openTarget = null }, themeMode = themeMode, onTheme = { m ->
                     themeMode = m
                     Prefs.setTheme(this@MainActivity, m)
                 })
@@ -84,7 +87,7 @@ class MainActivity : FragmentActivity() {
 }
 
 @Composable
-fun App(openMail: Boolean, onMailOpened: () -> Unit, themeMode: String, onTheme: (String) -> Unit) {
+fun App(openMail: Boolean, onMailOpened: () -> Unit, openTarget: String?, onTargetOpened: () -> Unit, themeMode: String, onTheme: (String) -> Unit) {
     val stack = remember { mutableStateListOf(Screen.Home) }
     var splash by remember { mutableStateOf(true) }
     val ctx = LocalContext.current
@@ -117,6 +120,27 @@ fun App(openMail: Boolean, onMailOpened: () -> Unit, themeMode: String, onTheme:
         if (openMail && !splash) {
             if (stack.last() != Screen.Mail) stack.add(Screen.Mail)
             onMailOpened()
+        }
+    }
+    // Dotknięcie widżetu otwiera wskazany ekran (lista pomp jest poza stosem).
+    LaunchedEffect(openTarget, splash) {
+        val t = openTarget
+        if (t != null && !splash) {
+            val screen = when (t) {
+                "lan" -> Screen.Lan
+                "wifi" -> Screen.Wifi
+                "sadp" -> Screen.Sadp
+                "weather" -> Screen.Weather
+                "mail" -> Screen.Mail
+                else -> null
+            }
+            if (t == "pumps") {
+                pumpsOpen = true
+            } else if (screen != null) {
+                pumpsOpen = false
+                if (stack.last() != screen) stack.add(screen)
+            }
+            onTargetOpened()
         }
     }
     fun back() {

@@ -124,7 +124,7 @@ private fun parseForecast(json: String): Forecast {
     return Forecast(days, hours, now)
 }
 
-private fun weatherText(code: Int): String = when {
+internal fun weatherText(code: Int): String = when {
     code == 0 -> "Bezchmurnie"
     code in 1..2 -> "Częściowe zachmurzenie"
     code == 3 -> "Pochmurno"
@@ -138,7 +138,7 @@ private fun weatherText(code: Int): String = when {
     else -> ""
 }
 
-private fun weatherIcon(code: Int): String = when {
+internal fun weatherIcon(code: Int): String = when {
     code == 0 -> "☀️"
     code in 1..3 -> "⛅"
     code in 45..48 -> "🌫️"
@@ -210,6 +210,7 @@ fun WeatherScreen(onBack: () -> Unit) {
                     "&hourly=temperature_2m,weather_code,precipitation_probability&timezone=auto&forecast_days=7"
                 forecast = withContext(Dispatchers.IO) { parseForecast(Http.get(url)) }
                 cityName = name
+                WeatherWidget.saveLocation(ctx, lat, lon, name)
                 status = ""
             } catch (e: Exception) {
                 status = "Błąd pobierania pogody."

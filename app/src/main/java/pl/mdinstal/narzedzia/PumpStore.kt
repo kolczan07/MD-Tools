@@ -126,6 +126,7 @@ object PumpStore {
             )
         }
         prefs(ctx).edit().putString(KEY_LIST, a.toString()).putLong(KEY_UPDATED, now).apply()
+        Widgets.updatePumps(ctx)
     }
 
     private const val KEY_SYNC = "sync_state"

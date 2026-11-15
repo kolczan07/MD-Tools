@@ -166,7 +166,7 @@ object Prefs {
 
     /** Ostatnio znana liczba nieprzeczytanych wątków w Odebranych (plakietka na kafelku Poczta). */
     fun mailUnread(c: Context): Int = sp(c).getInt("mail_unread", 0)
-    fun setMailUnread(c: Context, v: Int) { sp(c).edit().putInt("mail_unread", v).apply() }
+    fun setMailUnread(c: Context, v: Int) { sp(c).edit().putInt("mail_unread", v).apply(); Widgets.updateMail(c) }
 
     fun mailHistoryId(c: Context): String = sp(c).getString("mail_history_id", "") ?: ""
     fun setMailHistoryId(c: Context, v: String) { sp(c).edit().putString("mail_history_id", v).apply() }
