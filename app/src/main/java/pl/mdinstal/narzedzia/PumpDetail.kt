@@ -328,6 +328,29 @@ private fun TokenFetchView(onDone: () -> Unit) {
 /** Ostatnia surowa ramka strumienia bez pola "parameters" (i inne komunikaty hubu), do diagnostyki alarmów. */
 internal object LiveMeta {
     @Volatile var text: String = ""
+
+    /** Aktywne alarmy/ostrzeżenia z ramki: pole "alarms" = [{"name":"FloorTError","isAlarm":false}], isAlarm=false oznacza ostrzeżenie. */
+    @Volatile var alarms: List<Pair<String, Boolean>> = emptyList()
+
+    /** Błędy modułu komunikacyjnego z pola system.SBCError. */
+    @Volatile var sbcErrors: List<String> = emptyList()
+
+    fun parse(json: String) {
+        try {
+            val o = JSONObject(json)
+            val a = o.optJSONArray("alarms")
+            if (a != null) {
+                alarms = (0 until a.length()).mapNotNull { i ->
+                    val e = a.optJSONObject(i) ?: return@mapNotNull null
+                    val n = e.optString("name")
+                    if (n.isBlank()) null else n to e.optBoolean("isAlarm")
+                }
+            }
+            val se = o.optJSONObject("system")?.optJSONArray("SBCError")
+            if (se != null) sbcErrors = (0 until se.length()).map { se.opt(it)?.toString().orEmpty() }.filter { it.isNotBlank() }
+        } catch (e: Exception) {
+        }
+    }
 }
 
 /** Most JS -> Kotlin dla strumienia na żywo (wywołania z wątku WebView przekazujemy na wątek główny). */
@@ -344,7 +367,7 @@ private class LiveBridge(
     fun status(s: String) { main.post { onStatus(s) } }
 
     @JavascriptInterface
-    fun meta(s: String) { LiveMeta.text = s.take(4000) }
+    fun meta(s: String) { LiveMeta.text = s.take(4000); LiveMeta.parse(s) }
 }
 
 /**
@@ -1334,12 +1357,12 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
         }
         .sortedBy { it.order }
         .map { it.keyword to faultText(current[it.keyword], it) }
-    // Aktywne alarmy przychodzą jako dodatkowe pola strumienia (spoza opisu parametrów), np. FloorTError = true.
+    // Aktywne alarmy i ostrzeżenia: pole "alarms" w ramce strumienia (nazwa + isAlarm), opis z tłumaczeń portalu.
     val known = d.params.map { it.keyword }.toSet()
     val extras = current.filter { (k, _) -> k !in known }
-    val activeAlarms = extras
-        .filter { (k, v) -> faultActive(v) && (d.alarmTexts.containsKey(k) || v == true) }
-        .map { (k, _) -> k to (d.alarmTexts[k] ?: k) }
+    val activeAlarms = LiveMeta.alarms.map { (n, isAlarm) ->
+        n to ((d.alarmTexts[n] ?: n) + if (isAlarm) " (alarm)" else " (ostrzeżenie)")
+    } + LiveMeta.sbcErrors.map { it to "Błąd modułu komunikacyjnego: $it" }
     val allLines = lines + activeAlarms
     // Reset: zapisywalny parametr, którego nazwa albo etykieta to "reset alarms" (w dowolnej kolejności).
     val resetParam = d.params.firstOrNull {
