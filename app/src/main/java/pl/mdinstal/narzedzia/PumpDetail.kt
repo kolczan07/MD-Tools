@@ -1275,7 +1275,7 @@ private fun FieldRow(p: Param, cur: Any?, des: Any?, editable: Boolean, locked: 
     }
 }
 
-private val FAULT_KEY = Regex("alarm|error|fault|err|warn|usterk|blad|błąd", RegexOption.IGNORE_CASE)
+private val FAULT_KEY = Regex("alarm|alm|error|fault|flt|err|warn|wrn|usterk|blad|błąd", RegexOption.IGNORE_CASE)
 private val RESET_KEY = Regex("reset|kasuj|clear|ack", RegexOption.IGNORE_CASE)
 
 /** Opis wartości błędu: lista (każdy element z opisem z listy wartości), liczba/tekst z opisem, a gdy go brak, surowa wartość. */
@@ -1314,7 +1314,8 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
         .filter {
             !RESET_KEY.containsMatchIn(it.keyword) &&
                 !it.keyword.equals("Alarm", true) && !it.keyword.equals("Warning", true) &&
-                (FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true)) &&
+                (FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) ||
+                    Regex("active\\s*(alarm|warn|err)", RegexOption.IGNORE_CASE).containsMatchIn(it.raw)) &&
                 faultActive(current[it.keyword])
         }
         .sortedBy { it.order }
@@ -1324,6 +1325,11 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
         canEdit(it) && Regex("reset\\W*(alarm|alm|err|fault|warn)|(alarm|alm|err|fault|warn)\\w*\\W*reset", RegexOption.IGNORE_CASE).containsMatchIn(it.raw)
     }
     var confirm by remember { mutableStateOf(false) }
+    // Diagnostyka: wszystkie parametry związane z alarmami (nawet nieaktywne), żeby dało się dopasować opis błędu.
+    val diag = d.params
+        .filter { FAULT_KEY.containsMatchIn(it.keyword) || it.group.contains("alarm", true) || it.group.contains("warn", true) }
+        .take(25)
+        .map { "${it.keyword} [${it.group}] = ${current[it.keyword]?.toString() ?: "brak"}" }
 
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1352,6 +1358,13 @@ private fun FaultCard(d: Detail, current: Map<String, Any?>, saveMsg: String?, o
                 Button(onClick = { confirm = true }) { Text("Resetuj") }
             }
             if (saveMsg != null) Text(saveMsg, fontSize = 13.sp, color = MaterialTheme.colorScheme.primary)
+            if (diag.isNotEmpty()) {
+                var showDiag by remember { mutableStateOf(false) }
+                TextButton(onClick = { showDiag = !showDiag }) { Text(if (showDiag) "Ukryj diagnostykę" else "Diagnostyka") }
+                if (showDiag) androidx.compose.foundation.text.selection.SelectionContainer {
+                    Column { diag.forEach { SubText(it) } }
+                }
+            }
         }
     }
     if (confirm && resetParam != null) {
