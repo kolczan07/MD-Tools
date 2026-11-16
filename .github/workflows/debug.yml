@@ -28,7 +28,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0)
+          TAG=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || echo v0.0)
           gradle assembleDebug --no-daemon \
             -PversionName="${TAG#v}-debug" \
             -PversionCode=$(( $(date +%s) / 60 ))
