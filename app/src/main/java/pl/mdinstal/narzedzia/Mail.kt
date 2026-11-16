@@ -553,11 +553,16 @@ private fun wrapHtml(body: String): String =
 private fun escapeText(t: String): String =
     "<pre>" + t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</pre>"
 
-private fun openAttachment(ctx: Context, a: MailAttachment, bytes: ByteArray) {
+private fun isPdf(a: MailAttachment): Boolean =
+    a.mime.equals("application/pdf", ignoreCase = true) || a.name.endsWith(".pdf", ignoreCase = true)
+
+private fun saveAttachment(ctx: Context, a: MailAttachment, bytes: ByteArray): File {
     val safe = a.name.replace(Regex("[^\\p{L}\\p{N}._ -]"), "_").ifBlank { "zalacznik" }
     val dir = File(ctx.cacheDir, "mail/${a.messageId}").apply { mkdirs() }
-    val f = File(dir, safe)
-    f.writeBytes(bytes)
+    return File(dir, safe).also { it.writeBytes(bytes) }
+}
+
+private fun openFile(ctx: Context, a: MailAttachment, f: File) {
     val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
     val i = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, a.mime.ifBlank { "*/*" })
@@ -590,6 +595,7 @@ fun MailScreen(onBack: () -> Unit) {
     var compose by remember { mutableStateOf<ComposeInit?>(null) }
     var contacts by remember { mutableStateOf(Prefs.mailContacts(ctx)) }
     val selected = remember { mutableStateListOf<String>() }
+    var pdfView by remember { mutableStateOf<Pair<String, File>?>(null) }
 
     /** Wywołanie API z jednym ponowieniem po odświeżeniu wygasłego tokenu. */
     suspend fun <T> api(block: suspend (String) -> T): T = withContext(Dispatchers.IO) {
@@ -828,6 +834,13 @@ fun MailScreen(onBack: () -> Unit) {
         return
     }
 
+    val pv = pdfView
+    if (pv != null) {
+        BackHandler { pdfView = null }
+        PdfViewerScreen(pv.first, pv.second, onClose = { pdfView = null })
+        return
+    }
+
     val cur = thread
     if (cur != null) {
         BackHandler { thread = null }
@@ -843,6 +856,7 @@ fun MailScreen(onBack: () -> Unit) {
                     Prefs.setTrustedSenders(ctx, trusted.toList())
                 }
             },
+            onOpenPdf = { name, f -> pdfView = name to f },
             fetchAttachment = { a -> api { tk -> GmailApi.attachment(tk, a.messageId, a.attachmentId) } },
             onTrash = {
                 scope.launch {
@@ -1122,6 +1136,7 @@ private fun MailThreadView(
     onReply: (Boolean) -> Unit,
     onTrust: (String) -> Unit,
     fetchAttachment: suspend (MailAttachment) -> ByteArray,
+    onOpenPdf: (String, File) -> Unit,
     onTrash: () -> Unit,
     onRestore: () -> Unit,
     onBack: () -> Unit
@@ -1217,7 +1232,8 @@ private fun MailThreadView(
                                         info = ""
                                         try {
                                             val bytes = withContext(Dispatchers.IO) { fetchAttachment(a) }
-                                            withContext(Dispatchers.IO) { openAttachment(ctx, a, bytes) }
+                                            val f = withContext(Dispatchers.IO) { saveAttachment(ctx, a, bytes) }
+                                            if (isPdf(a)) onOpenPdf(a.name, f) else openFile(ctx, a, f)
                                         } catch (e: CancellationException) {
                                             throw e
                                         } catch (e: android.content.ActivityNotFoundException) {

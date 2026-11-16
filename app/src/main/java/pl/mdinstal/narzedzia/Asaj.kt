@@ -508,7 +508,7 @@ private fun newAsajWebView(ctx: Context, bridge: AsajBridge): WebView = WebView(
     webViewClient = WebViewClient()
 }
 
-private fun sharePdf(ctx: Context, file: File) {
+internal fun sharePdf(ctx: Context, file: File) {
     val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
     val i = Intent(Intent.ACTION_SEND).apply {
         type = "application/pdf"
@@ -846,7 +846,7 @@ fun AsajScreen(onBack: () -> Unit, onOpenSettings: () -> Unit) {
 
         val v = viewing
         if (v != null) {
-            PdfViewerScreen(v.first, v.second, onClose = {
+            PdfViewerScreen(v.first.fileName, v.second, onClose = {
                 viewing = null
             })
         } else {
@@ -1291,89 +1291,6 @@ private fun DocRow(d: AsajDoc, who: String?, opening: Boolean, muted: Boolean, o
                 }
             }
         }
-    }
-}
-
-/** Renderer stron PDF (android.graphics.pdf), jedna strona naraz. */
-private class PdfDoc(file: File) {
-    private val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
-    private val renderer = PdfRenderer(pfd)
-    private val lock = Mutex()
-    val pageCount: Int = renderer.pageCount
-
-    suspend fun render(index: Int, width: Int): Bitmap = lock.withLock {
-        withContext(Dispatchers.IO) {
-            val p = renderer.openPage(index)
-            try {
-                val h = (width.toFloat() * p.height / p.width).toInt().coerceAtLeast(1)
-                val bmp = Bitmap.createBitmap(width, h, Bitmap.Config.ARGB_8888)
-                bmp.eraseColor(android.graphics.Color.WHITE)
-                p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                bmp
-            } finally {
-                p.close()
-            }
-        }
-    }
-
-    fun close() {
-        try {
-            renderer.close()
-            pfd.close()
-        } catch (e: Exception) {
-        }
-    }
-}
-
-@Composable
-private fun PdfViewerScreen(doc: AsajDoc, file: File, onClose: () -> Unit) {
-    val ctx = LocalContext.current
-    val pdf = remember(file) { try { PdfDoc(file) } catch (e: Exception) { null } }
-    DisposableEffect(pdf) { onDispose { pdf?.close() } }
-    var zoom by remember { mutableStateOf(1f) }
-    val screenW = LocalConfiguration.current.screenWidthDp
-
-    AppScaffold(
-        doc.fileName,
-        onClose,
-        actions = {
-            IconButton(onClick = { zoom = (zoom - 0.5f).coerceAtLeast(1f) }) { Text("−", fontSize = 22.sp) }
-            IconButton(onClick = { zoom = (zoom + 0.5f).coerceAtMost(3f) }) { Text("+", fontSize = 22.sp) }
-            IconButton(onClick = { sharePdf(ctx, file) }) { Icon(Icons.Filled.Share, contentDescription = "Udostępnij") }
-        }
-    ) { pad ->
-        if (pdf == null) {
-            Text("Nie udało się otworzyć pliku PDF.", modifier = Modifier.padding(pad).padding(16.dp))
-        } else {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(pad)
-                    .horizontalScroll(rememberScrollState())
-            ) {
-                LazyColumn(Modifier.width((screenW * zoom).dp)) {
-                    items(pdf.pageCount) { i -> PdfPage(pdf, i) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun PdfPage(pdf: PdfDoc, index: Int) {
-    val bmp by produceState<Bitmap?>(null, pdf, index) {
-        value = try { pdf.render(index, 1600) } catch (e: Exception) { null }
-    }
-    val b = bmp
-    if (b != null) {
-        Image(
-            bitmap = b.asImageBitmap(),
-            contentDescription = null,
-            contentScale = ContentScale.FillWidth,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
-        )
-    } else {
-        Box(Modifier.fillMaxWidth().height(400.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
     }
 }
 
