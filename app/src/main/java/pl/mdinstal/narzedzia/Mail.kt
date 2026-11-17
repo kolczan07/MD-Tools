@@ -988,7 +988,8 @@ fun MailScreen(onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 FOLDERS.forEach { (id, name) ->
-                    PillChip(name, folder == id) {
+                    val unreadN = if (id == "INBOX") Prefs.mailUnread(ctx) else 0
+                    FolderTab(if (unreadN > 0) "$name  $unreadN" else name, folder == id) {
                         if (folder != id && token != null) {
                             folder = id
                             selected.clear()
@@ -1007,7 +1008,7 @@ fun MailScreen(onBack: () -> Unit) {
                 ) {
                     SearchField(query, { query = it }, "Szukaj", Modifier.weight(1f), onSearch = { load(false) })
                     if (folder == "INBOX") {
-                        PillChip("Nieprzeczytane", onlyUnread) {
+                        FilterChipSmall("Nieprzeczytane", onlyUnread) {
                             onlyUnread = !onlyUnread
                             selected.clear()
                             rows.clear()
@@ -1042,7 +1043,12 @@ fun MailScreen(onBack: () -> Unit) {
             if (!busy && !needsConnect && status.isEmpty() && rows.isEmpty() && token != null) {
                 SubText(if (searchQuery().isNotEmpty()) "Brak wyników." else "Brak wiadomości w tym folderze.", Modifier.padding(top = 16.dp))
             }
-            LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
+            val sheetShape = RoundedCornerShape(16.dp)
+            LazyColumn(
+                Modifier.weight(1f).padding(top = 8.dp).clip(sheetShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, sheetShape)
+            ) {
                 rows.forEachIndexed { idx, r ->
                     val label = mailGroup(r.time)
                     if (label.isNotEmpty() && label != rows.getOrNull(idx - 1)?.let { mailGroup(it.time) }) {
@@ -1105,6 +1111,50 @@ fun MailScreen(onBack: () -> Unit) {
             text = { Text("Wszystkie wiadomości z kosza zostaną usunięte na stałe. Tego nie da się cofnąć.") },
             confirmButton = { TextButton(onClick = { confirmEmpty = false; emptyTrash() }) { Text("Usuń na stałe") } },
             dismissButton = { TextButton(onClick = { confirmEmpty = false }) { Text("Anuluj") } }
+        )
+    }
+}
+
+/** Zakładka folderu: zwykły tekst, aktywna z delikatnym kolorowym tłem. */
+@Composable
+private fun FolderTab(text: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 14.sp,
+            maxLines = 1,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) cs.primary else cs.onSurfaceVariant
+        )
+    }
+}
+
+/** Mały filtr przy wyszukiwarce (np. „Nieprzeczytane”). */
+@Composable
+private fun FilterChipSmall(text: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .clip(shape)
+            .background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .border(1.dp, if (selected) cs.primary else cs.outlineVariant, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 5.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 12.sp,
+            maxLines = 1,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) cs.primary else cs.onSurfaceVariant
         )
     }
 }
