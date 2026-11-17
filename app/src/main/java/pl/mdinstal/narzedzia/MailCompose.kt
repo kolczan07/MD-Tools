@@ -194,12 +194,16 @@ private fun squeezeBlank(lines: List<String>): List<String> {
     return out
 }
 
-/**
- * Czytnik: odebrany mail w czystym tekście → czytelny HTML (zwykła czcionka, klikalne linki,
- * cytat „> ” jako blok z kreską, podpis po „-- ” przygaszony, bez śmieci <mailto:…>).
- */
-internal fun plainToHtml(raw: String): String {
-    val lines = raw.replace("\r", "").replace(MAIL_JUNK, "").lines()
+private val ORIG_MARK = Regex(
+    "^\\s*-{2,}\\s*(Original Message|Oryginalna wiadomość|Wiadomość oryginalna|Forwarded message|Przekazana wiadomość)\\s*-{2,}\\s*$",
+    RegexOption.IGNORE_CASE
+)
+private val REPLY_HEAD = Regex(
+    "^\\s*(.{0,200}napisał(\\(a\\)|a)?:|On .{0,200}wrote:|W dniu .{0,200}(napisał|pisze).{0,40}:)\\s*$"
+)
+
+/** Renderuje linie czystego tekstu: zwykły tekst, cytaty „> ” w blokach, podpis po „-- ” przygaszony. */
+private fun renderPlain(lines: List<String>): String {
     val sb = StringBuilder()
     var i = 0
     while (i < lines.size) {
@@ -224,6 +228,22 @@ internal fun plainToHtml(raw: String): String {
             }
         }
     }
+    return sb.toString()
+}
+
+/**
+ * Czytnik: odebrany mail w czystym tekście → czytelny HTML (zwykła czcionka, klikalne linki, podpis przygaszony,
+ * bez śmieci <mailto:…>). Wszystko od „-----Original Message-----”, „… napisał(a):” lub pierwszego „> ”
+ * jest zwinięte pod przyciskiem „Pokaż oryginalną wiadomość” (jak w BlueMail).
+ */
+internal fun plainToHtml(raw: String): String {
+    val lines = raw.replace("\r", "").replace(MAIL_JUNK, "").lines()
+    var cut = lines.indexOfFirst { ORIG_MARK.matches(it) || REPLY_HEAD.matches(it) || it.startsWith(">") }
+    if (cut > 0 && lines[cut].startsWith(">") && REPLY_HEAD.matches(lines[cut - 1])) cut -= 1
+    if (cut <= 0 || lines.subList(0, cut).all { it.isBlank() }) return renderPlain(lines)
+    val sb = StringBuilder(renderPlain(lines.subList(0, cut)))
+    sb.append("<details style=\"margin-top:14px\"><summary style=\"display:inline-block;padding:6px 14px;border:1px solid rgba(128,128,128,.5);border-radius:16px;font-size:13px;color:rgba(128,128,128,1)\">Pokaż oryginalną wiadomość</summary>")
+    sb.append("<div style=\"margin-top:10px\">").append(renderPlain(lines.subList(cut, lines.size))).append("</div></details>")
     return sb.toString()
 }
 
