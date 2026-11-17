@@ -105,6 +105,82 @@ private fun encWord(s: String): String =
 
 private fun b64Lines(b: ByteArray): String = Base64.encodeToString(b, Base64.CRLF)
 
+/** Treść maila jako multipart/alternative: czysty tekst (jak w edytorze) + ładny HTML. Zaczyna się od nagłówka Content-Type. */
+private fun bodyMime(body: String): String {
+    val text = body.replace("\r\n", "\n")
+    val b = "----alt" + UUID.randomUUID().toString().replace("-", "")
+    val sb = StringBuilder()
+    sb.append("Content-Type: multipart/alternative; boundary=\"$b\"").append(CRLF).append(CRLF)
+    sb.append("--").append(b).append(CRLF)
+    sb.append("Content-Type: text/plain; charset=UTF-8").append(CRLF)
+    sb.append("Content-Transfer-Encoding: base64").append(CRLF).append(CRLF)
+    sb.append(b64Lines(text.replace("\n", CRLF).toByteArray(Charsets.UTF_8)))
+    sb.append("--").append(b).append(CRLF)
+    sb.append("Content-Type: text/html; charset=UTF-8").append(CRLF)
+    sb.append("Content-Transfer-Encoding: base64").append(CRLF).append(CRLF)
+    sb.append(b64Lines(bodyToHtml(text).toByteArray(Charsets.UTF_8)))
+    sb.append("--").append(b).append("--").append(CRLF)
+    return sb.toString()
+}
+
+private val LINK_RE = Regex(
+    "(https?://[^\\s<]+)|([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})|" +
+        "((?<![\\d])(?:\\+48 ?)?\\d{3}[ -]?\\d{3}[ -]?\\d{3}(?!\\d))|" +
+        "((?<![@/\\w.-])(?:[a-z0-9-]+\\.)+(?:com|pl|eu|net|org)(?:/[^\\s<]*)?)",
+    RegexOption.IGNORE_CASE
+)
+private val QUOTE_HEAD = Regex("^.{0,200}napisał\\(a\\):\\s*$")
+
+private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+/** Zamienia adresy www, e-maile (i opcjonalnie telefony) w klikalne linki. Wejście musi być już zescapowane. */
+private fun linkify(escaped: String, phones: Boolean): String =
+    LINK_RE.replace(escaped) { m ->
+        val t = m.value
+        when {
+            m.groups[1] != null -> "<a href=\"$t\" style=\"color:#1a5fb4\">$t</a>"
+            m.groups[2] != null -> "<a href=\"mailto:$t\" style=\"color:#1a5fb4\">$t</a>"
+            m.groups[3] != null ->
+                if (!phones) t else {
+                    val digits = t.filter { it.isDigit() }
+                    val num = if (digits.length == 9) "+48$digits" else "+$digits"
+                    "<a href=\"tel:$num\" style=\"color:#1a5fb4;text-decoration:none\">$t</a>"
+                }
+            else -> "<a href=\"https://$t\" style=\"color:#1a5fb4\">$t</a>"
+        }
+    }
+
+private fun linesToHtml(lines: List<String>, phones: Boolean): String =
+    lines.joinToString("<br>") { linkify(esc(it.trimEnd()), phones) }
+
+/** Rozbija treść z edytora na: wiadomość, podpis (po „-- ”) i cytat (od „… napisał(a):”) i składa z nich HTML. */
+private fun bodyToHtml(text: String): String {
+    val all = text.lines()
+    val qi = all.indices.firstOrNull { QUOTE_HEAD.matches(all[it]) && (all.getOrNull(it + 1)?.startsWith(">") ?: true) }
+    val head = if (qi == null) all else all.subList(0, qi)
+    val quote = if (qi == null) emptyList() else all.subList(qi, all.size)
+    val si = head.indexOfFirst { it.trimEnd() == "--" }
+    val msg = (if (si >= 0) head.subList(0, si) else head).dropLastWhile { it.isBlank() }.dropWhile { it.isBlank() }
+    val sig = if (si >= 0) head.subList(si + 1, head.size).dropLastWhile { it.isBlank() }.dropWhile { it.isBlank() } else emptyList()
+
+    val sb = StringBuilder()
+    sb.append("<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222\">")
+    if (msg.isNotEmpty()) sb.append("<div>").append(linesToHtml(msg, false)).append("</div>")
+    if (sig.isNotEmpty()) {
+        sb.append("<div style=\"margin-top:16px;padding-top:10px;border-top:1px solid #d0d0d0;font-size:12px;line-height:1.55;color:#555\">")
+        sb.append(linesToHtml(sig, true)).append("</div>")
+    }
+    if (quote.isNotEmpty()) {
+        sb.append("<div class=\"gmail_quote\" style=\"margin-top:16px;font-size:12px;color:#666\">")
+        sb.append(esc(quote[0].trim())).append("<br>")
+        sb.append("<blockquote style=\"margin:6px 0 0;padding-left:10px;border-left:2px solid #ccc\">")
+        sb.append(linesToHtml(quote.drop(1).map { it.trimStart('>', ' ') }.dropLastWhile { it.isBlank() }, false))
+        sb.append("</blockquote></div>")
+    }
+    sb.append("</div>")
+    return sb.toString()
+}
+
 /** Buduje wiadomość MIME i zwraca ją w base64url (pole `raw` w Gmail API). Wywoływać poza wątkiem UI. */
 fun buildRaw(ctx: Context, d: ComposeData): String {
     val sb = StringBuilder()
@@ -114,18 +190,14 @@ fun buildRaw(ctx: Context, d: ComposeData): String {
     sb.append("Subject: ").append(encWord(d.subject)).append(CRLF)
     if (d.inReplyTo.isNotBlank()) sb.append("In-Reply-To: ").append(d.inReplyTo).append(CRLF)
     if (d.references.isNotBlank()) sb.append("References: ").append(d.references).append(CRLF)
-    val bodyBytes = d.body.replace("\r\n", "\n").replace("\n", CRLF).toByteArray(Charsets.UTF_8)
+    val bodyPart = bodyMime(d.body)
     if (d.attachments.isEmpty()) {
-        sb.append("Content-Type: text/plain; charset=UTF-8").append(CRLF)
-        sb.append("Content-Transfer-Encoding: base64").append(CRLF).append(CRLF)
-        sb.append(b64Lines(bodyBytes))
+        sb.append(bodyPart)
     } else {
         val boundary = "----md" + UUID.randomUUID().toString().replace("-", "")
         sb.append("Content-Type: multipart/mixed; boundary=\"$boundary\"").append(CRLF).append(CRLF)
         sb.append("--").append(boundary).append(CRLF)
-        sb.append("Content-Type: text/plain; charset=UTF-8").append(CRLF)
-        sb.append("Content-Transfer-Encoding: base64").append(CRLF).append(CRLF)
-        sb.append(b64Lines(bodyBytes))
+        sb.append(bodyPart)
         for (a in d.attachments) {
             val bytes = ctx.contentResolver.openInputStream(a.uri)?.use { it.readBytes() }
                 ?: throw IOException("Nie można odczytać pliku ${a.name}")

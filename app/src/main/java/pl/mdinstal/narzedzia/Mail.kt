@@ -498,7 +498,8 @@ private fun replyInit(t: MailThread, myEmail: String, all: Boolean, sig: String)
             .joinToString(", ")
     } else ""
     val subj = if (t.subject.startsWith("re:", ignoreCase = true)) t.subject else "Re: ${t.subject}"
-    val src = (last.text ?: last.snippet).replace("\r", "").lines().take(80).joinToString("\n") { "> $it" }
+    val junk = Regex("<(?:mailto:|https?://|gg:)[^>]*>")
+    val src = (last.text ?: last.snippet).replace("\r", "").replace(junk, "").lines().take(80).joinToString("\n") { "> $it" }
     val body = sigBlock(sig) + "\n\n${mailTimeFull(last.time)}, ${senderName(last.from)} napisał(a):\n$src"
     return ComposeInit(
         to = to, cc = cc, subject = subj, body = body, threadId = t.id,
