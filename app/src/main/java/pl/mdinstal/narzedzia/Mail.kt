@@ -264,7 +264,10 @@ object GmailApi {
         var html: String? = null
         var text: String? = null
         val atts = ArrayList<MailAttachment>()
+        val inline = HashMap<String, InlineImg>()
     }
+
+    private class InlineImg(val attId: String, val mime: String, val size: Long)
 
     private fun decode(data: String, contentType: String): String {
         val bytes = Base64.decode(data, Base64.URL_SAFE)
@@ -284,6 +287,10 @@ object GmailApi {
         val body = p.optJSONObject("body")
         val filename = p.optString("filename")
         val attId = body?.optString("attachmentId").orEmpty()
+        val cid = header(p, "Content-ID").trim().removePrefix("<").removeSuffix(">")
+        if (cid.isNotEmpty() && attId.isNotEmpty() && mime.startsWith("image/", ignoreCase = true)) {
+            out.inline[cid] = InlineImg(attId, mime, body?.optLong("size") ?: 0L)
+        }
         if (filename.isNotEmpty() && attId.isNotEmpty()) {
             out.atts.add(MailAttachment(msgId, attId, filename, mime, body?.optLong("size") ?: 0L))
         } else if (body != null && body.has("data")) {
@@ -305,15 +312,27 @@ object GmailApi {
             val payload = m.optJSONObject("payload")
             val parsed = Parsed()
             if (payload != null) walk(payload, m.getString("id"), parsed)
+            var htmlOut = parsed.html
+            val usedAtt = HashSet<String>()
+            if (htmlOut != null && parsed.inline.isNotEmpty() && htmlOut.contains("cid:", ignoreCase = true)) {
+                for ((cid, img) in parsed.inline) {
+                    if (!htmlOut!!.contains("cid:$cid", ignoreCase = true)) continue
+                    usedAtt.add(img.attId)
+                    if (img.size > 800_000L) continue
+                    val bytes = try { attachment(token, m.getString("id"), img.attId) } catch (e: Exception) { continue }
+                    val uri = "data:${img.mime};base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    htmlOut = htmlOut.replace("cid:$cid", uri, ignoreCase = true)
+                }
+            }
             list.add(
                 MailMessage(
                     id = m.getString("id"),
                     from = header(payload, "From"),
                     to = header(payload, "To"),
                     time = m.optString("internalDate").toLongOrNull() ?: 0L,
-                    html = parsed.html,
+                    html = htmlOut,
                     text = parsed.text,
-                    attachments = parsed.atts,
+                    attachments = parsed.atts.filterNot { it.attachmentId in usedAtt },
                     unread = "UNREAD" in labelsOf(m),
                     snippet = unescapeHtml(m.optString("snippet")),
                     cc = header(payload, "Cc"),
@@ -548,7 +567,25 @@ private fun sizeText(b: Long): String = when {
     else -> "$b B"
 }
 
-private fun wrapHtml(body: String, dark: Boolean, textColor: Int, isHtml: Boolean): String {
+private val DARK_MEDIA = Regex("@media[^{]*prefers-color-scheme\\s*:\\s*dark[^{]*\\{", RegexOption.IGNORE_CASE)
+
+/** Usuwa bloki @media (prefers-color-scheme: dark) — mail ma być w swoim jasnym wydaniu, które potem odwracamy sami. */
+private fun stripDarkMedia(html: String): String {
+    var out = html
+    while (true) {
+        val m = DARK_MEDIA.find(out) ?: return out
+        var depth = 1
+        var i = m.range.last + 1
+        while (i < out.length && depth > 0) {
+            if (out[i] == '{') depth++ else if (out[i] == '}') depth--
+            i++
+        }
+        out = out.removeRange(m.range.first, i)
+    }
+}
+
+private fun wrapHtml(rawBody: String, dark: Boolean, textColor: Int, isHtml: Boolean): String {
+    val body = if (dark && isHtml) stripDarkMedia(rawBody) else rawBody
     val col = String.format("#%06X", textColor and 0xFFFFFF)
     // Ciemny motyw: mail HTML (zwykle czarny tekst na białym) odwracamy filtrem, a obrazy przywracamy.
     val darkFix = if (dark && isHtml)
@@ -1310,6 +1347,10 @@ private fun MailBody(html: String, showImages: Boolean) {
         factory = { c ->
             WebView(c).apply {
                 settings.javaScriptEnabled = false
+                if (android.os.Build.VERSION.SDK_INT >= 29) {
+                    @Suppress("DEPRECATION")
+                    settings.forceDark = android.webkit.WebSettings.FORCE_DARK_OFF
+                }
                 settings.loadWithOverviewMode = true
                 settings.useWideViewPort = true
                 settings.allowFileAccess = false
