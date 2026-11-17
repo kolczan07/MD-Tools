@@ -209,11 +209,22 @@ object GmailApi {
         return ids to j.optString("nextPageToken").ifEmpty { null }
     }
 
+    /** Nagłówki zapisane surowym UTF-8 (np. nazwa kontaktu w „To”) Gmail oddaje jako Windows-1252 („MaÅ‚gorzata”) — naprawiamy. */
+    private fun fixMojibake(s: String): String {
+        if (s.none { it == 'Å' || it == 'Ä' || it == 'Ã' }) return s
+        return try {
+            val fixed = String(s.toByteArray(charset("windows-1252")), Charsets.UTF_8)
+            if (fixed.contains('\uFFFD')) s else fixed
+        } catch (e: Exception) {
+            s
+        }
+    }
+
     private fun header(payload: JSONObject?, name: String): String {
         val hs = payload?.optJSONArray("headers") ?: return ""
         for (i in 0 until hs.length()) {
             val h = hs.getJSONObject(i)
-            if (h.optString("name").equals(name, ignoreCase = true)) return h.optString("value")
+            if (h.optString("name").equals(name, ignoreCase = true)) return fixMojibake(h.optString("value"))
         }
         return ""
     }
@@ -494,7 +505,7 @@ suspend fun refreshMailContacts(ctx: Context, token: String) {
 }
 
 /** Dzieli listę adresów po przecinkach, pomijając przecinki w cudzysłowie. */
-private fun splitAddrs(s: String): List<String> {
+internal fun splitAddrs(s: String): List<String> {
     val out = ArrayList<String>()
     val cur = StringBuilder()
     var q = false

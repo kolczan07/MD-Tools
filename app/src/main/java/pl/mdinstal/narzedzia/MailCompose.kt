@@ -107,6 +107,12 @@ private fun encWord(s: String): String =
     if (s.all { it.code in 32..126 }) s
     else "=?UTF-8?B?" + Base64.encodeToString(s.toByteArray(Charsets.UTF_8), Base64.NO_WRAP) + "?="
 
+/** Koduje nazwy kontaktów z polskimi znakami w nagłówkach To/Cc (RFC 2047), żeby nie robiły się krzaczki. */
+private fun encAddrs(list: String): String = splitAddrs(list).joinToString(", ") { a ->
+    val i = a.indexOf('<')
+    if (i > 0 && a.any { it.code > 126 }) encWord(a.substring(0, i).trim().trim('"')) + " " + a.substring(i) else a
+}
+
 private fun b64Lines(b: ByteArray): String = Base64.encodeToString(b, Base64.CRLF)
 
 /** Treść maila jako multipart/alternative: czysty tekst (jak w edytorze) + ładny HTML. Zaczyna się od nagłówka Content-Type. */
@@ -255,8 +261,8 @@ internal fun plainToHtml(raw: String): String {
 fun buildRaw(ctx: Context, d: ComposeData): String {
     val sb = StringBuilder()
     sb.append("MIME-Version: 1.0").append(CRLF)
-    sb.append("To: ").append(d.to).append(CRLF)
-    if (d.cc.isNotBlank()) sb.append("Cc: ").append(d.cc).append(CRLF)
+    sb.append("To: ").append(encAddrs(d.to)).append(CRLF)
+    if (d.cc.isNotBlank()) sb.append("Cc: ").append(encAddrs(d.cc)).append(CRLF)
     sb.append("Subject: ").append(encWord(d.subject)).append(CRLF)
     if (d.inReplyTo.isNotBlank()) sb.append("In-Reply-To: ").append(d.inReplyTo).append(CRLF)
     if (d.references.isNotBlank()) sb.append("References: ").append(d.references).append(CRLF)
