@@ -605,7 +605,8 @@ private fun stripDarkMedia(html: String): String {
 
 private fun wrapHtml(rawBody: String, dark: Boolean, textColor: Int, isHtml: Boolean): String {
     val body = if (dark && isHtml) stripDarkMedia(rawBody) else rawBody
-    val col = String.format("#%06X", textColor and 0xFFFFFF)
+    // Mail HTML w ciemnym motywie odwracamy filtrem, więc domyślny tekst ma być ciemny (po odwróceniu jasny).
+    val col = if (dark && isHtml) "#111111" else String.format("#%06X", textColor and 0xFFFFFF)
     // Ciemny motyw: mail HTML (zwykle czarny tekst na białym) odwracamy filtrem, a obrazy przywracamy.
     val darkFix = if (dark && isHtml)
         "html{filter:invert(1) hue-rotate(180deg)}img,video{filter:invert(1) hue-rotate(180deg)}" else ""
@@ -1347,9 +1348,17 @@ private fun MailThreadView(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (open) SubText("Do: " + splitAddrs(m.to).joinToString(", ") { senderName(it) }.ifBlank { "—" }, Modifier) else SubText(m.snippet.take(80))
+                            if (open) {
+                                Text(
+                                    "Do: " + splitAddrs(m.to).joinToString(", ") { senderName(it) }.ifBlank { "—" },
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = cs.onSurfaceVariant
+                                )
+                            } else SubText(m.snippet.take(80))
                         }
-                        SubText(mailTimeFull(m.time).substringBefore(",").let { if (open) mailTimeFull(m.time) else mailTime(m.time) })
+                        SubText(if (open) mailTimeFull(m.time).replace(" ${Calendar.getInstance().get(Calendar.YEAR)},", ",") else mailTime(m.time))
                     }
                     if (open) {
                         Spacer(Modifier.size(10.dp))
