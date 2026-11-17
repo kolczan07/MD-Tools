@@ -181,6 +181,52 @@ private fun bodyToHtml(text: String): String {
     return sb.toString()
 }
 
+private val MAIL_JUNK = Regex("<(?:mailto:|https?://|gg:|tel:)[^>]*>")
+
+/** Zbija ciągi pustych linii do jednej i obcina puste linie z obu końców. */
+private fun squeezeBlank(lines: List<String>): List<String> {
+    val out = ArrayList<String>()
+    for (l in lines) {
+        if (l.isBlank() && (out.isEmpty() || out.last().isBlank())) continue
+        out.add(l.trimEnd())
+    }
+    while (out.isNotEmpty() && out.last().isBlank()) out.removeAt(out.size - 1)
+    return out
+}
+
+/**
+ * Czytnik: odebrany mail w czystym tekście → czytelny HTML (zwykła czcionka, klikalne linki,
+ * cytat „> ” jako blok z kreską, podpis po „-- ” przygaszony, bez śmieci <mailto:…>).
+ */
+internal fun plainToHtml(raw: String): String {
+    val lines = raw.replace("\r", "").replace(MAIL_JUNK, "").lines()
+    val sb = StringBuilder()
+    var i = 0
+    while (i < lines.size) {
+        val quoted = lines[i].startsWith(">")
+        val chunk = ArrayList<String>()
+        while (i < lines.size && lines[i].startsWith(">") == quoted) {
+            chunk.add(if (quoted) lines[i].trimStart('>', ' ') else lines[i]); i++
+        }
+        val clean = squeezeBlank(chunk)
+        if (clean.isEmpty()) continue
+        if (quoted) {
+            sb.append("<blockquote style=\"margin:8px 0;padding-left:10px;border-left:2px solid rgba(128,128,128,.5);color:rgba(128,128,128,1);font-size:13px\">")
+            sb.append(linesToHtml(clean, false)).append("</blockquote>")
+        } else {
+            val si = clean.indexOfFirst { it.trimEnd() == "--" }
+            val msg = if (si >= 0) clean.subList(0, si) else clean
+            val sig = if (si >= 0) squeezeBlank(clean.subList(si + 1, clean.size)) else emptyList()
+            if (msg.isNotEmpty()) sb.append("<div>").append(linesToHtml(squeezeBlank(msg), false)).append("</div>")
+            if (sig.isNotEmpty()) {
+                sb.append("<div style=\"margin-top:12px;padding-top:8px;border-top:1px solid rgba(128,128,128,.4);font-size:13px;color:rgba(128,128,128,1)\">")
+                sb.append(linesToHtml(sig, true)).append("</div>")
+            }
+        }
+    }
+    return sb.toString()
+}
+
 /** Buduje wiadomość MIME i zwraca ją w base64url (pole `raw` w Gmail API). Wywoływać poza wątkiem UI. */
 fun buildRaw(ctx: Context, d: ComposeData): String {
     val sb = StringBuilder()

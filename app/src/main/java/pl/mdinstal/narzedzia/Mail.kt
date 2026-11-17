@@ -548,11 +548,10 @@ private fun sizeText(b: Long): String = when {
 
 private fun wrapHtml(body: String): String =
     "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
-        "<style>body{font-family:sans-serif;font-size:15px;margin:0;padding:0;word-wrap:break-word;overflow-wrap:anywhere}" +
+        "<style>a{color:#4a8fe7}body{font-family:sans-serif;font-size:15px;line-height:1.45;margin:0;padding:0;word-wrap:break-word;overflow-wrap:anywhere}" +
         "img{max-width:100%;height:auto}table{max-width:100%}pre{white-space:pre-wrap}</style></head><body>$body</body></html>"
 
-private fun escapeText(t: String): String =
-    "<pre>" + t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + "</pre>"
+private fun escapeText(t: String): String = plainToHtml(t)
 
 private fun isPdf(a: MailAttachment): Boolean =
     a.mime.equals("application/pdf", ignoreCase = true) || a.name.endsWith(".pdf", ignoreCase = true)
