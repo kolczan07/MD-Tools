@@ -3,6 +3,12 @@ package pl.mdinstal.narzedzia
 import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,7 +20,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,36 +63,27 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState()).padding(16.dp)
         ) {
             SectionTitle("Motyw aplikacji")
-            listOf(
+            val themes = listOf(
                 Triple("light", "☀️ Jasny", "Zawsze jasny"),
                 Triple("dark", "🌙 Ciemny", "Zawsze ciemny"),
                 Triple("system", "⚙️ Systemowy", "Zgodnie z ustawieniami telefonu")
-            ).forEach { (key, title, desc) ->
-                AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { onTheme(key) }) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                            SubText(desc)
-                        }
-                        RadioButton(selected = themeMode == key, onClick = { onTheme(key) })
-                    }
-                }
-            }
+            )
+            DropdownCard(
+                value = themes.firstOrNull { it.first == themeMode }?.second ?: themes.last().second,
+                desc = themes.firstOrNull { it.first == themeMode }?.third.orEmpty(),
+                options = themes.map { it.first to it.second },
+                onSelect = onTheme
+            )
 
             SectionTitle("Użytkownik")
             val userCtx = LocalContext.current
             var appUser by remember { mutableStateOf(Prefs.appUser(userCtx)) }
-            listOf("Marcin", "Daniel").forEach { name ->
-                AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { Prefs.setAppUser(userCtx, name); appUser = name }) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                            SubText("Powitanie na ekranie głównym i imię w podpisie maili")
-                        }
-                        RadioButton(selected = appUser == name, onClick = { Prefs.setAppUser(userCtx, name); appUser = name })
-                    }
-                }
-            }
+            DropdownCard(
+                value = appUser.ifBlank { "Nie wybrano" },
+                desc = "Powitanie na ekranie głównym i imię w podpisie maili",
+                options = listOf("Marcin" to "Marcin", "Daniel" to "Daniel"),
+                onSelect = { Prefs.setAppUser(userCtx, it); appUser = it }
+            )
 
             SectionTitle("Logowanie")
             NavCard("Ustawienia użytkownika", "Portal IGLU, Asaj.pl, konto Google (kopia na Drive)") { onOpen(Screen.UserSettings) }
@@ -100,6 +96,28 @@ fun SettingsScreen(
 
             SectionTitle("O aplikacji")
             NavCard("O aplikacji", "Wersja, informacje, autor") { onOpen(Screen.About) }
+        }
+    }
+}
+
+/** Karta z rozsuwaną listą: pokazuje aktualny wybór, po dotknięciu rozwija opcje. */
+@Composable
+private fun DropdownCard(value: String, desc: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        AppCard(Modifier.fillMaxWidth(), onClick = { open = true }) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(value, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                    if (desc.isNotBlank()) SubText(desc)
+                }
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Rozwiń listę", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { (key, label) ->
+                DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(key); open = false })
+            }
         }
     }
 }
