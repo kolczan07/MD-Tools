@@ -73,6 +73,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -547,10 +548,16 @@ private fun sizeText(b: Long): String = when {
     else -> "$b B"
 }
 
-private fun wrapHtml(body: String): String =
-    "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
-        "<style>a{color:#4a8fe7}summary{list-style:none}summary::-webkit-details-marker{display:none}body{font-family:sans-serif;font-size:15px;line-height:1.45;margin:0;padding:0;word-wrap:break-word;overflow-wrap:anywhere}" +
-        "img{max-width:100%;height:auto}table{max-width:100%}pre{white-space:pre-wrap}</style></head><body>$body</body></html>"
+private fun wrapHtml(body: String, dark: Boolean, textColor: Int, isHtml: Boolean): String {
+    val col = String.format("#%06X", textColor and 0xFFFFFF)
+    // Ciemny motyw: mail HTML (zwykle czarny tekst na białym) odwracamy filtrem, a obrazy przywracamy.
+    val darkFix = if (dark && isHtml)
+        "html{filter:invert(1) hue-rotate(180deg)}img,video{filter:invert(1) hue-rotate(180deg)}" else ""
+    return "<html><head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">" +
+        "<style>a{color:#4a8fe7}summary{list-style:none}summary::-webkit-details-marker{display:none}" +
+        "body{font-family:sans-serif;font-size:15px;line-height:1.45;margin:0;padding:0;color:$col;word-wrap:break-word;overflow-wrap:anywhere}" +
+        "img{max-width:100%;height:auto}table{max-width:100%}pre{white-space:pre-wrap}$darkFix</style></head><body>$body</body></html>"
+}
 
 private fun escapeText(t: String): String = plainToHtml(t)
 
@@ -1212,7 +1219,7 @@ private fun MailThreadView(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (open) SubText("Do: " + m.to.ifBlank { "—" }, Modifier) else SubText(m.snippet.take(80))
+                            if (open) SubText("Do: " + splitAddrs(m.to).joinToString(", ") { senderName(it) }.ifBlank { "—" }, Modifier) else SubText(m.snippet.take(80))
                         }
                         SubText(mailTimeFull(m.time).substringBefore(",").let { if (open) mailTimeFull(m.time) else mailTime(m.time) })
                     }
@@ -1225,7 +1232,15 @@ private fun MailThreadView(
                             m.text != null -> escapeText(m.text)
                             else -> escapeText(m.snippet)
                         }
-                        MailBody(wrapHtml(body), showImages)
+                        MailBody(
+                            wrapHtml(
+                                body,
+                                dark = cs.background.luminance() < 0.5f,
+                                textColor = cs.onSurface.toArgb(),
+                                isHtml = html != null
+                            ),
+                            showImages
+                        )
                         if (html != null && !showImages && html.contains("<img", ignoreCase = true)) {
                             Row {
                                 TextButton(onClick = { images[m.id] = true }) { Text("Pokaż obrazy") }
