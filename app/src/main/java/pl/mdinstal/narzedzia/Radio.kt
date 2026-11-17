@@ -335,6 +335,18 @@ fun RadioScreen(onBack: () -> Unit) {
             val host = try { android.net.Uri.parse(s.url).host.orEmpty() } catch (e: Exception) { "" }
             val real = if (host.endsWith("reconv.pl")) (resolveRedirect(ctx, s.url) ?: s.url) else s.url
             nowUrl = real
+            val art: ByteArray? = if (s.logo.isBlank()) null else try {
+                kotlinx.coroutines.withTimeoutOrNull(2000) { LogoCache.load(ctx, s.logo) }?.let { b ->
+                    val sq = Bitmap.createBitmap(256, 256, Bitmap.Config.ARGB_8888)
+                    val cv = android.graphics.Canvas(sq)
+                    cv.drawColor(android.graphics.Color.WHITE)
+                    val k = minOf(216f / b.width, 216f / b.height)
+                    val w = (b.width * k).toInt().coerceAtLeast(1)
+                    val h = (b.height * k).toInt().coerceAtLeast(1)
+                    cv.drawBitmap(Bitmap.createScaledBitmap(b, w, h, true), (256 - w) / 2f, (256 - h) / 2f, null)
+                    java.io.ByteArrayOutputStream().also { sq.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+                }
+            } catch (e: Exception) { null }
             c.setMediaItem(
                 MediaItem.Builder()
                     .setUri(real)
@@ -343,6 +355,7 @@ fun RadioScreen(onBack: () -> Unit) {
                             .setTitle(s.name)
                             .setArtist("MD-Radio")
                             .setAlbumTitle(OutdoorTemp.lastText ?: "MD-Tools")
+                            .also { if (art != null) it.setArtworkData(art, MediaMetadata.PICTURE_TYPE_FRONT_COVER) }
                             .build()
                     )
                     .build()
