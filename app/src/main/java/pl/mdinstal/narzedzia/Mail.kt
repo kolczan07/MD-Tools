@@ -1093,7 +1093,7 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
                     Text(
                         r.who.ifBlank { "—" },
                         modifier = Modifier.weight(1f),
-                        fontWeight = if (r.unread) FontWeight.ExtraBold else FontWeight.Normal,
+                        fontWeight = if (r.unread) FontWeight.ExtraBold else FontWeight.SemiBold,
                         fontSize = 15.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1113,7 +1113,7 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
                 }
                 Text(
                     r.subject,
-                    fontWeight = if (r.unread) FontWeight.Bold else FontWeight.Normal,
+                    fontWeight = if (r.unread) FontWeight.Bold else FontWeight.SemiBold,
                     fontSize = 14.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1169,6 +1169,12 @@ private fun MailThreadView(
             Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            Text(
+                thread.subject,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
             thread.messages.forEach { m ->
                 val own = myEmail.isNotEmpty() && m.from.contains(myEmail, ignoreCase = true)
                 val open = expanded[m.id] == true
