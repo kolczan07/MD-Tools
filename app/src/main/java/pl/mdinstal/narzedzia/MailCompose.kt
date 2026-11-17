@@ -76,7 +76,11 @@ class ComposeInit(
     val body: String = "",
     val threadId: String? = null,
     val inReplyTo: String = "",
-    val references: String = ""
+    val references: String = "",
+    /** Podpis dopisywany automatycznie pod treścią (w oknie pokazany tylko do podglądu). */
+    val signature: String = "",
+    /** Cytowana wiadomość (nagłówek + linie z „> ”), zwinięta w oknie i dopisywana przy wysyłce. */
+    val quote: String = ""
 )
 
 class MailContact(val email: String, val name: String, val count: Int)
@@ -327,7 +331,13 @@ fun MailComposeScreen(
         }
     }
 
-    fun data() = ComposeData(to.trim(), cc.trim(), subject.trim(), body, atts.toList(), init.threadId, init.inReplyTo, init.references)
+    var showQuote by remember { mutableStateOf(false) }
+    fun fullBody(): String = buildString {
+        append(body.trimEnd())
+        if (init.signature.isNotBlank()) append("\n\n-- \n").append(init.signature.trim())
+        if (init.quote.isNotBlank()) append("\n\n").append(init.quote.trimEnd())
+    }
+    fun data() = ComposeData(to.trim(), cc.trim(), subject.trim(), fullBody(), atts.toList(), init.threadId, init.inReplyTo, init.references)
     val dirty = to != init.to || cc != init.cc || subject != init.subject || body != init.body || atts.isNotEmpty()
 
     fun send() {
@@ -424,14 +434,46 @@ fun MailComposeScreen(
                 FieldRow("Temat", subject, { subject = it })
             }
             AppCard(Modifier.fillMaxWidth()) {
-                BasicTextField(
-                    value = bodyTf,
-                    onValueChange = { bodyTf = it },
-                    textStyle = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, color = cs.onSurface),
-                    cursorBrush = SolidColor(cs.primary),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 260.dp).padding(14.dp)
+                Column {
+                    BasicTextField(
+                        value = bodyTf,
+                        onValueChange = { bodyTf = it },
+                        textStyle = TextStyle(fontSize = 15.sp, lineHeight = 22.sp, color = cs.onSurface),
+                        cursorBrush = SolidColor(cs.primary),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = if (init.quote.isNotBlank()) 140.dp else 260.dp).padding(14.dp)
+                    )
+                    if (init.signature.isNotBlank()) {
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(cs.outlineVariant))
+                        Text(
+                            init.signature.trim(),
+                            fontSize = 13.sp,
+                            lineHeight = 19.sp,
+                            color = cs.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth().padding(14.dp)
+                        )
+                    }
+                }
+            }
+            if (init.quote.isNotBlank()) {
+                val quoteView = squeezeBlank(init.quote.lines().map { it.trimStart('>', ' ') }).joinToString("\n")
+                Text(
+                    if (showQuote) "Ukryj cytowaną wiadomość" else "Pokaż cytowaną wiadomość",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = cs.primary,
+                    modifier = Modifier.clip(RoundedCornerShape(16.dp)).background(cs.primary.copy(alpha = 0.10f))
+                        .clickable { showQuote = !showQuote }.padding(horizontal = 14.dp, vertical = 8.dp)
                 )
+                if (showQuote) {
+                    Text(
+                        quoteView,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = cs.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(cs.surfaceVariant.copy(alpha = 0.5f)).padding(12.dp)
+                    )
+                }
             }
             atts.toList().forEach { a ->
                 Row(

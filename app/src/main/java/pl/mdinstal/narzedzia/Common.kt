@@ -129,10 +129,11 @@ fun AppCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    flat: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(16.dp)
-    val base = modifier
+    val base = if (flat) modifier.background(MaterialTheme.colorScheme.surface) else modifier
         .clip(shape)
         .background(MaterialTheme.colorScheme.surface)
         .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)

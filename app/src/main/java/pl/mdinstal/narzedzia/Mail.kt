@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -505,8 +506,6 @@ private fun splitAddrs(s: String): List<String> {
     return out.filter { it.isNotEmpty() }
 }
 
-private fun sigBlock(sig: String): String = if (sig.isBlank()) "" else "\n\n-- \n" + sig.trim()
-
 private fun replyInit(t: MailThread, myEmail: String, all: Boolean, sig: String): ComposeInit {
     val own = { m: MailMessage -> myEmail.isNotEmpty() && m.from.contains(myEmail, ignoreCase = true) }
     val last = t.messages.lastOrNull { !own(it) } ?: t.messages.last()
@@ -521,9 +520,9 @@ private fun replyInit(t: MailThread, myEmail: String, all: Boolean, sig: String)
     val subj = if (t.subject.startsWith("re:", ignoreCase = true)) t.subject else "Re: ${t.subject}"
     val junk = Regex("<(?:mailto:|https?://|gg:)[^>]*>")
     val src = (last.text ?: last.snippet).replace("\r", "").replace(junk, "").lines().take(80).joinToString("\n") { "> $it" }
-    val body = sigBlock(sig) + "\n\n${mailTimeFull(last.time)}, ${senderName(last.from)} napisał(a):\n$src"
+    val quote = "${mailTimeFull(last.time)}, ${senderName(last.from)} napisał(a):\n$src"
     return ComposeInit(
-        to = to, cc = cc, subject = subj, body = body, threadId = t.id,
+        to = to, cc = cc, subject = subj, body = "", signature = sig.trim(), quote = quote, threadId = t.id,
         inReplyTo = ref.msgIdHeader,
         references = (ref.refs + " " + ref.msgIdHeader).trim()
     )
@@ -556,6 +555,26 @@ private fun mailTime(t: Long): String {
         else -> "dd.MM.yyyy"
     }
     return SimpleDateFormat(f, Locale("pl", "PL")).format(Date(t))
+}
+
+/** Nagłówek grupy na liście: Dzisiaj / Wczoraj / Ostatnie 7 dni / miesiąc (z rokiem, jeśli inny niż bieżący). */
+private fun mailGroup(t: Long): String {
+    if (t <= 0L) return ""
+    fun startOfDay(ms: Long): Long = Calendar.getInstance().apply {
+        timeInMillis = ms
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val days = Math.round((startOfDay(System.currentTimeMillis()) - startOfDay(t)) / 86_400_000.0).toInt()
+    return when {
+        days <= 0 -> "Dzisiaj"
+        days == 1 -> "Wczoraj"
+        days <= 7 -> "Ostatnie 7 dni"
+        else -> {
+            val sameYear = Calendar.getInstance().get(Calendar.YEAR) == Calendar.getInstance().apply { timeInMillis = t }.get(Calendar.YEAR)
+            SimpleDateFormat(if (sameYear) "LLLL" else "LLLL yyyy", Locale("pl", "PL")).format(Date(t))
+                .replaceFirstChar { it.uppercase() }
+        }
+    }
 }
 
 private fun mailTimeFull(t: Long): String =
@@ -1024,18 +1043,32 @@ fun MailScreen(onBack: () -> Unit) {
                 SubText(if (searchQuery().isNotEmpty()) "Brak wyników." else "Brak wiadomości w tym folderze.", Modifier.padding(top = 16.dp))
             }
             LazyColumn(Modifier.weight(1f).padding(top = 8.dp)) {
-                items(rows, key = { it.id }) { r ->
-                    MailRowCard(
-                        r,
-                        loading = openingId == r.id,
-                        selected = r.id in selected,
-                        onClick = {
-                            if (selecting) {
-                                if (r.id in selected) selected.remove(r.id) else selected.add(r.id)
-                            } else if (openingId == null) openThread(r.id)
-                        },
-                        onLongClick = { if (r.id !in selected) selected.add(r.id) }
-                    )
+                rows.forEachIndexed { idx, r ->
+                    val label = mailGroup(r.time)
+                    if (label.isNotEmpty() && label != rows.getOrNull(idx - 1)?.let { mailGroup(it.time) }) {
+                        item(key = "h$idx") {
+                            Text(
+                                label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
+                    item(key = r.id) {
+                        MailRowCard(
+                            r,
+                            loading = openingId == r.id,
+                            selected = r.id in selected,
+                            onClick = {
+                                if (selecting) {
+                                    if (r.id in selected) selected.remove(r.id) else selected.add(r.id)
+                                } else if (openingId == null) openThread(r.id)
+                            },
+                            onLongClick = { if (r.id !in selected) selected.add(r.id) }
+                        )
+                    }
                 }
                 if (nextToken != null) {
                     item {
@@ -1052,7 +1085,7 @@ fun MailScreen(onBack: () -> Unit) {
         }
         if (token != null) {
             ExtendedFloatingActionButton(
-                onClick = { compose = ComposeInit(body = sigBlock(Prefs.mailSignature(ctx))) },
+                onClick = { compose = ComposeInit(signature = Prefs.mailSignature(ctx).trim()) },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(pad).padding(16.dp)
@@ -1107,13 +1140,13 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
     val dark = cs.background.luminance() < 0.5f
     val readWeight = if (dark) FontWeight.SemiBold else FontWeight.Bold
     val unreadWeight = FontWeight.ExtraBold
-    AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = onClick, onLongClick = onLongClick) {
+    AppCard(Modifier.fillMaxWidth(), onClick = onClick, onLongClick = onLongClick, flat = true) {
         Row(
             Modifier.background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.Top
         ) {
-            Box(Modifier.size(40.dp)) {
+            Box(Modifier.size(38.dp)) {
                 Box(
                     Modifier.fillMaxSize().clip(CircleShape).background(if (selected) cs.primary else ac.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
@@ -1127,12 +1160,6 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
                             color = ac
                         )
                     }
-                }
-                if (r.unread && !selected) {
-                    Box(
-                        Modifier.align(Alignment.TopEnd).size(11.dp).clip(CircleShape).background(cs.primary)
-                            .border(2.dp, cs.surface, CircleShape)
-                    )
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -1167,9 +1194,23 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
                     overflow = TextOverflow.Ellipsis,
                     color = cs.onSurface
                 )
-                Text(r.snippet, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = cs.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        r.snippet,
+                        modifier = Modifier.weight(1f),
+                        fontSize = 13.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        color = cs.onSurfaceVariant
+                    )
+                    if (r.unread && !selected) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(Modifier.size(9.dp).clip(CircleShape).background(cs.primary))
+                    }
+                }
             }
         }
+        Box(Modifier.fillMaxWidth().padding(start = 66.dp).height(1.dp).background(cs.outlineVariant))
     }
 }
 
