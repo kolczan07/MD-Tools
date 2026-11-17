@@ -14,7 +14,7 @@ enum class Screen {
     UserSettings, GoogleSettings, Mail, MailSettings
 }
 
-data class Station(val name: String, val url: String)
+data class Station(val name: String, val url: String, val logo: String = "")
 data class Shortcut(val pkg: String, val label: String)
 
 fun todayPl(): String = SimpleDateFormat("dd.MM.yyyy", Locale("pl", "PL")).format(Date())

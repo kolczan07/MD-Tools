@@ -18,11 +18,11 @@ object Prefs {
     fun setLastUpdateCheck(c: Context, t: Long) { sp(c).edit().putLong("upd_check", t).apply() }
 
     fun favorites(c: Context): List<Station> =
-        readList(sp(c).getString("fav", "[]")) { Station(it.optString("name"), it.optString("url")) }
+        readList(sp(c).getString("fav", "[]")) { Station(it.optString("name"), it.optString("url"), it.optString("logo")) }
             .filter { it.url.isNotEmpty() }
 
     fun setFavorites(c: Context, l: List<Station>) {
-        sp(c).edit().putString("fav", toJson(l) { JSONObject().put("name", it.name).put("url", it.url) }).apply()
+        sp(c).edit().putString("fav", toJson(l) { JSONObject().put("name", it.name).put("url", it.url).put("logo", it.logo) }).apply()
     }
 
     fun shortcuts(c: Context): List<Shortcut> =

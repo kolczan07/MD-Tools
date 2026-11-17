@@ -52,6 +52,37 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.Dp
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import androidx.media3.common.C
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
@@ -76,7 +107,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
-import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.URLEncoder
 
@@ -182,7 +212,8 @@ private fun searchStations(query: String, onlyPl: Boolean): List<Station>? {
                 val o = arr.getJSONObject(i)
                 val url = o.optString("url_resolved")
                 if (url.startsWith("https://") || url.startsWith("http://stream.open.fm/")) {
-                    out.add(Station(o.optString("name").trim().ifEmpty { "Stacja" }, url))
+                    val logo = o.optString("favicon").trim().takeIf { it.startsWith("http") }.orEmpty()
+                    out.add(Station(o.optString("name").trim().ifEmpty { "Stacja" }, url, logo))
                 }
             }
             return out
@@ -342,17 +373,26 @@ fun RadioScreen(onBack: () -> Unit) {
         scope.launch {
             status = "Odświeżam ulubione…"
             var updated = 0
+            var logos = 0
             val newList = withContext(Dispatchers.IO) {
                 favs.toList().map { f ->
                     val found = searchStations(f.name, false)
                         ?.firstOrNull { it.name.equals(f.name, ignoreCase = true) }
-                    if (found != null && found.url != f.url) { updated++; found } else f
+                    if (found == null) f
+                    else if (found.url != f.url) { updated++; found }
+                    else if (f.logo.isEmpty() && found.logo.isNotEmpty()) { logos++; f.copy(logo = found.logo) }
+                    else f
                 }
             }
             favs.clear()
             favs.addAll(newList)
             Prefs.setFavorites(ctx, newList)
-            status = if (updated > 0) "Zaktualizowano adresy: $updated" else "Adresy są aktualne."
+            status = when {
+                updated > 0 && logos > 0 -> "Zaktualizowano adresy: $updated, pobrano logo: $logos"
+                updated > 0 -> "Zaktualizowano adresy: $updated"
+                logos > 0 -> "Pobrano logo: $logos"
+                else -> "Adresy są aktualne."
+            }
         }
     }
 
@@ -362,7 +402,19 @@ fun RadioScreen(onBack: () -> Unit) {
         Prefs.setFavorites(ctx, favs.toList())
     }
 
-    AppScaffold("Radio internetowe", onBack) { pad ->
+    val nowStation = nowName?.let { n -> (favs + results).firstOrNull { it.name == n } ?: Station(n, "") }
+
+    AppScaffold(
+        "Radio internetowe",
+        onBack,
+        actions = {
+            if (activeTab == RadioTab.FAVORITES && favs.isNotEmpty()) {
+                IconButton(onClick = { refreshFavs() }) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Odśwież adresy i logo stacji")
+                }
+            }
+        }
+    ) { pad ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -372,53 +424,9 @@ fun RadioScreen(onBack: () -> Unit) {
                 .padding(horizontal = 14.dp)
         ) {
             // ── ZAKŁADKI ──────────────────────────────────────────
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                RadioTab.entries.forEach { tab ->
-                    val label = when (tab) {
-                        RadioTab.FAVORITES -> "★ Ulubione"
-                        RadioTab.SEARCH -> "🔍 Szukaj"
-                    }
-                    FilterChip(
-                        selected = activeTab == tab,
-                        onClick = { activeTab = tab },
-                        label = { Text(label) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-
-            // ── PASEK ODTWARZANIA ─────────────────────────────────
-            val name = nowName
-            if (name != null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.primary)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        (if (error) "⚠ Błąd: " else if (playing) "▶ " else "⏸ ") + name,
-                        modifier = Modifier.weight(1f).clickable { togglePlay() },
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    TextButton(onClick = { togglePlay() }) {
-                        Text(if (playing) "❚❚" else "▶", color = Color.White, fontSize = 18.sp)
-                    }
-                    TextButton(onClick = { stop() }) {
-                        Text("STOP", color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                RadioTabChip("Ulubione", Icons.Filled.Star, activeTab == RadioTab.FAVORITES) { activeTab = RadioTab.FAVORITES }
+                RadioTabChip("Szukaj", Icons.Filled.Search, activeTab == RadioTab.SEARCH) { activeTab = RadioTab.SEARCH }
             }
 
             if (error && errorInfo.isNotEmpty()) {
@@ -433,66 +441,98 @@ fun RadioScreen(onBack: () -> Unit) {
             }
 
             // ── ZAWARTOŚĆ ZAKŁADEK ────────────────────────────────
+            val sheetShape = RoundedCornerShape(16.dp)
+            val sheet = Modifier
+                .fillMaxWidth()
+                .clip(sheetShape)
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, sheetShape)
             when (activeTab) {
                 RadioTab.FAVORITES -> {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        item {
-                            TextButton(onClick = { refreshFavs() }) { Text("↻ Odśwież adresy stacji") }
+                    if (status.isNotEmpty()) SubText(status, Modifier.padding(bottom = 6.dp))
+                    if (favs.isEmpty()) {
+                        SubText("Brak ulubionych. Dotknij gwiazdki przy stacji w zakładce Szukaj, żeby dodać.")
+                        Spacer(Modifier.weight(1f))
+                    } else {
+                        LazyColumn(modifier = sheet.weight(1f, fill = false)) {
+                            items(favs.toList()) { s ->
+                                StationRow(s, isFav = true, current = nowName == s.name, onPlay = { play(s) }, onFav = { toggleFav(s) })
+                            }
                         }
-                        if (status.isNotEmpty()) item { SubText(status) }
-                        if (favs.isEmpty()) {
-                            item { SubText("Brak ulubionych. Dotknij ☆ przy stacji, żeby dodać.") }
-                        }
-                        items(favs.toList()) { s ->
-                            StationRow(
-                                s,
-                                isFav = true,
-                                onPlay = { play(s) },
-                                onFav = { toggleFav(s) }
-                            )
-                        }
+                        Spacer(Modifier.weight(1f))
                     }
                 }
 
                 RadioTab.SEARCH -> {
                     Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         SearchField(
                             value = query,
                             onChange = { query = it },
                             placeholder = "Szukaj stacji, np. Eska, RMF, Zet",
-                            modifier = Modifier.weight(1f).align(Alignment.CenterVertically),
+                            modifier = Modifier.weight(1f),
                             onSearch = { search() }
                         )
-                        Button(
-                            onClick = { search() },
-                            modifier = Modifier.align(Alignment.CenterVertically)
-                        ) { Text("Szukaj") }
+                        RadioFilterChip("Tylko Polska", onlyPl) { onlyPl = !onlyPl; search() }
                     }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = onlyPl, onCheckedChange = { onlyPl = it })
-                        Text("Tylko Polska", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        if (status.isNotEmpty()) item { SubText(status) }
+                    if (status.isNotEmpty()) SubText(status, Modifier.padding(bottom = 6.dp))
+                    LazyColumn(modifier = sheet.weight(1f, fill = false)) {
                         items(results) { s ->
                             StationRow(
                                 s,
                                 isFav = favs.any { it.url == s.url },
+                                current = nowName == s.name,
                                 onPlay = { play(s) },
                                 onFav = { toggleFav(s) }
                             )
                         }
+                    }
+                    Spacer(Modifier.weight(1f))
+                }
+            }
+
+            // ── MINI ODTWARZACZ ───────────────────────────────────
+            val cur = nowStation
+            if (cur != null) {
+                val cs = MaterialTheme.colorScheme
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp, bottom = 10.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(cs.surfaceVariant)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StationAvatar(cur, 42.dp, active = playing && !error)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(cur.name, fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = cs.onSurface)
+                        Text(
+                            when {
+                                error -> "Błąd odtwarzania"
+                                playing -> "Odtwarzanie"
+                                else -> "Wstrzymano"
+                            },
+                            fontSize = 12.sp,
+                            color = if (error) cs.error else cs.onSurfaceVariant
+                        )
+                    }
+                    Box(
+                        Modifier.size(42.dp).clip(CircleShape).background(cs.primary).clickable { togglePlay() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (playing) "Wstrzymaj" else "Odtwarzaj",
+                            tint = cs.onPrimary
+                        )
+                    }
+                    IconButton(onClick = { stop() }) {
+                        Icon(Icons.Filled.Stop, contentDescription = "Zatrzymaj", tint = cs.onSurfaceVariant)
                     }
                 }
             }
@@ -500,25 +540,147 @@ fun RadioScreen(onBack: () -> Unit) {
     }
 }
 
-@Composable
-private fun StationRow(s: Station, isFav: Boolean, onPlay: () -> Unit, onFav: () -> Unit) {
-    AppCard(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(horizontal = 6.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onFav) {
-                Text(if (isFav) "★" else "☆", fontSize = 22.sp, color = MaterialTheme.colorScheme.primary)
+private val RADIO_AVATAR = listOf(0xFF2563EB, 0xFF0D9488, 0xFFD97706, 0xFFDB2777, 0xFF7C3AED, 0xFF16A34A).map { Color(it) }
+
+/** Logo stacji pobierane z adresu podanego przez radio-browser; trzymane w pamięci i w pamięci podręcznej telefonu. */
+private object LogoCache {
+    private val mem = android.util.LruCache<String, Bitmap>(80)
+    private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    suspend fun load(ctx: android.content.Context, url: String): Bitmap? = withContext(Dispatchers.IO) {
+        mem.get(url)?.let { return@withContext it }
+        if (url in failed) return@withContext null
+        try {
+            val dir = File(ctx.cacheDir, "radio_logos").apply { mkdirs() }
+            val f = File(dir, Integer.toHexString(url.hashCode()) + ".img")
+            val bytes = if (f.exists() && f.length() > 0) f.readBytes() else {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 6000
+                c.readTimeout = 6000
+                c.setRequestProperty("User-Agent", "MD-Tools/3.1")
+                try {
+                    if (c.responseCode !in 200..299) throw IOException("HTTP ${c.responseCode}")
+                    val b = c.inputStream.use { it.readBytes() }
+                    if (b.size > 400_000) throw IOException("za duży")
+                    f.writeBytes(b)
+                    b
+                } finally {
+                    c.disconnect()
+                }
             }
-            Text(
-                s.name,
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onPlay() }
-                    .padding(vertical = 12.dp),
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 16.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            val side = maxOf(bounds.outWidth, bounds.outHeight)
+            val opts = BitmapFactory.Options().apply { inSampleSize = maxOf(1, side / 160) }
+            val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+            if (bmp == null) { failed.add(url); null } else { mem.put(url, bmp); bmp }
+        } catch (e: Exception) {
+            failed.add(url)
+            null
         }
+    }
+}
+
+/** Kółko stacji: logo (jeśli jest), a w zapasie pierwsza litera; podczas grania ikona fal. */
+@Composable
+private fun StationAvatar(s: Station, size: Dp, active: Boolean) {
+    val ctx = LocalContext.current
+    val tint = RADIO_AVATAR[(s.name.lowercase().hashCode() and 0x7fffffff) % RADIO_AVATAR.size]
+    val bmp by produceState<Bitmap?>(null, s.logo) {
+        value = if (s.logo.isNotBlank()) LogoCache.load(ctx, s.logo) else null
+    }
+    val logo = bmp
+    Box(
+        Modifier.size(size).clip(CircleShape).background(if (logo != null) Color.White else tint.copy(alpha = 0.15f)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (logo != null) {
+            Image(logo.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(5.dp))
+        } else if (active) {
+            Icon(Icons.Filled.GraphicEq, contentDescription = null, tint = tint)
+        } else {
+            Text(s.name.firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "?", fontWeight = FontWeight.Bold, color = tint)
+        }
+    }
+}
+
+@Composable
+private fun RadioTabChip(text: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = if (selected) cs.primary else cs.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text,
+            fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) cs.primary else cs.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun RadioFilterChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .clip(shape)
+            .background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .border(1.dp, if (selected) cs.primary else cs.outlineVariant, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 12.sp,
+            maxLines = 1,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) cs.primary else cs.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun StationRow(s: Station, isFav: Boolean, current: Boolean, onPlay: () -> Unit, onFav: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(if (current) cs.primary.copy(alpha = 0.10f) else Color.Transparent)
+                .clickable { onPlay() }
+                .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StationAvatar(s, 40.dp, active = current)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    s.name,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = cs.onSurface
+                )
+                if (current) Text("Teraz gra", fontSize = 12.sp, color = cs.primary)
+            }
+            IconButton(onClick = onFav) {
+                Icon(
+                    if (isFav) Icons.Filled.Star else Icons.Filled.StarBorder,
+                    contentDescription = if (isFav) "Usuń z ulubionych" else "Dodaj do ulubionych",
+                    tint = if (isFav) cs.primary else cs.onSurfaceVariant
+                )
+            }
+        }
+        Box(Modifier.fillMaxWidth().padding(start = 64.dp).height(1.dp).background(cs.outlineVariant))
     }
 }
