@@ -173,6 +173,52 @@ private fun sigKind(l: String): Int = when {
     else -> 0
 }
 
+/** Łączy linie podpisu tego samego rodzaju (adres+NIP, telefony, strona/mail) w jedną i formatuje telefony 3-3-3. */
+private fun mergeSigLines(lines: List<String>): List<String> {
+    val rest = ArrayList<Pair<Int, String>>()
+    for (l in lines) {
+        val txt = PHONE9.replace(l) { m -> m.groupValues[1] + " " + m.groupValues[2] + " " + m.groupValues[3] }
+        val k = sigKind(l)
+        if (k != 0 && rest.isNotEmpty() && rest.last().first == k) rest[rest.size - 1] = k to (rest.last().second + " · " + txt)
+        else rest.add(k to txt)
+    }
+    return rest.map { it.second }
+}
+
+/** Dzieli podpis na bloki rozdzielone pustymi liniami. */
+private fun sigBlocks(sig: List<String>): List<List<String>> {
+    val blocks = ArrayList<List<String>>()
+    var cur = ArrayList<String>()
+    for (l in sig) {
+        if (l.isBlank()) { if (cur.isNotEmpty()) { blocks.add(cur); cur = ArrayList() } } else cur.add(l.trim())
+    }
+    if (cur.isNotEmpty()) blocks.add(cur)
+    return blocks
+}
+
+/** Podgląd podpisu w oknie pisania — ten sam układ, który dostaje odbiorca. */
+@Composable
+private fun SignaturePreview(sig: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier) {
+        sigBlocks(sig.lines()).forEachIndexed { bi, b ->
+            if (bi > 0) Spacer(Modifier.height(8.dp))
+            if (bi == 0) {
+                val g = if (b.size == 1) GREETING.find(b[0]) else null
+                if (g != null) {
+                    Text(g.groupValues[1], fontSize = 13.sp, lineHeight = 19.sp, color = cs.onSurface)
+                    Text(g.groupValues[2], fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                } else {
+                    Text(b.joinToString("\n"), fontSize = 13.sp, lineHeight = 19.sp, color = cs.onSurface)
+                }
+            } else {
+                Text(b[0], fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Bold, color = cs.onSurface)
+                mergeSigLines(b.drop(1)).forEach { Text(it, fontSize = 12.sp, lineHeight = 19.sp, color = cs.onSurfaceVariant) }
+            }
+        }
+    }
+}
+
 /**
  * Podpis w blokach: „Pozdrawiam” + pogrubione imię, potem nazwa firmy, a pod nią mniejszym szarym tekstem
  * adres z NIP-em, telefony i strona/mail — każda grupa w jednej linii. [reader] = kolory neutralne (ciemny motyw czytnika).
@@ -197,16 +243,10 @@ private fun sigToHtml(sig: List<String>, reader: Boolean): String {
         } else {
             sb.append("<div style=\"margin-top:8px\"><div style=\"color:$main;font-weight:bold;font-size:13px\">")
             sb.append(linkify(esc(b[0]), true)).append("</div>")
-            val rest = ArrayList<Pair<Int, String>>()
-            for (l in b.drop(1)) {
-                val txt = PHONE9.replace(l) { m -> m.groupValues[1] + " " + m.groupValues[2] + " " + m.groupValues[3] }
-                val k = sigKind(l)
-                if (k != 0 && rest.isNotEmpty() && rest.last().first == k) rest[rest.size - 1] = k to (rest.last().second + " · " + txt)
-                else rest.add(k to txt)
-            }
+            val rest = mergeSigLines(b.drop(1))
             if (rest.isNotEmpty()) {
                 sb.append("<div style=\"color:$soft;font-size:12px;line-height:1.6\">")
-                sb.append(rest.joinToString("<br>") { linkify(esc(it.second), true) })
+                sb.append(rest.joinToString("<br>") { linkify(esc(it), true) })
                 sb.append("</div>")
             }
             sb.append("</div>")
@@ -503,13 +543,7 @@ fun MailComposeScreen(
                     )
                     if (init.signature.isNotBlank()) {
                         Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(cs.outlineVariant))
-                        Text(
-                            init.signature.trim(),
-                            fontSize = 13.sp,
-                            lineHeight = 19.sp,
-                            color = cs.onSurfaceVariant,
-                            modifier = Modifier.fillMaxWidth().padding(14.dp)
-                        )
+                        SignaturePreview(init.signature, Modifier.fillMaxWidth().padding(14.dp))
                     }
                 }
             }
