@@ -163,6 +163,58 @@ private fun linkify(escaped: String, phones: Boolean): String =
 private fun linesToHtml(lines: List<String>, phones: Boolean): String =
     lines.joinToString("<br>") { linkify(esc(it.trimEnd()), phones) }
 
+private val PHONE9 = Regex("(?<!\\d)(\\d{3})[ -]?(\\d{3})[ -]?(\\d{3})(?!\\d)")
+private val GREETING = Regex("^([^,]{2,20}),\\s*(.{2,40})$")
+
+private fun sigKind(l: String): Int = when {
+    l.contains('@') || l.contains("www.", true) || Regex("\\.(com|pl|eu|net|org)\\b", RegexOption.IGNORE_CASE).containsMatchIn(l) -> 3
+    PHONE9.containsMatchIn(l) -> 2
+    Regex("^(\\d{2}-\\d{3}|NIP)", RegexOption.IGNORE_CASE).containsMatchIn(l) -> 1
+    else -> 0
+}
+
+/**
+ * Podpis w blokach: „Pozdrawiam” + pogrubione imię, potem nazwa firmy, a pod nią mniejszym szarym tekstem
+ * adres z NIP-em, telefony i strona/mail — każda grupa w jednej linii. [reader] = kolory neutralne (ciemny motyw czytnika).
+ */
+private fun sigToHtml(sig: List<String>, reader: Boolean): String {
+    val main = if (reader) "inherit" else "#222"
+    val soft = if (reader) "rgba(128,128,128,1)" else "#555"
+    val blocks = ArrayList<List<String>>()
+    var cur = ArrayList<String>()
+    for (l in sig) {
+        if (l.isBlank()) { if (cur.isNotEmpty()) { blocks.add(cur); cur = ArrayList() } } else cur.add(l.trim())
+    }
+    if (cur.isNotEmpty()) blocks.add(cur)
+    val sb = StringBuilder()
+    blocks.forEachIndexed { bi, b ->
+        if (bi == 0) {
+            val g = if (b.size == 1) GREETING.find(b[0]) else null
+            sb.append("<div style=\"color:$main;font-size:13px\">")
+            if (g != null) sb.append(esc(g.groupValues[1])).append("<br><b>").append(esc(g.groupValues[2])).append("</b>")
+            else sb.append(linesToHtml(b, true))
+            sb.append("</div>")
+        } else {
+            sb.append("<div style=\"margin-top:8px\"><div style=\"color:$main;font-weight:bold;font-size:13px\">")
+            sb.append(linkify(esc(b[0]), true)).append("</div>")
+            val rest = ArrayList<Pair<Int, String>>()
+            for (l in b.drop(1)) {
+                val txt = PHONE9.replace(l) { m -> m.groupValues[1] + " " + m.groupValues[2] + " " + m.groupValues[3] }
+                val k = sigKind(l)
+                if (k != 0 && rest.isNotEmpty() && rest.last().first == k) rest[rest.size - 1] = k to (rest.last().second + " · " + txt)
+                else rest.add(k to txt)
+            }
+            if (rest.isNotEmpty()) {
+                sb.append("<div style=\"color:$soft;font-size:12px;line-height:1.6\">")
+                sb.append(rest.joinToString("<br>") { linkify(esc(it.second), true) })
+                sb.append("</div>")
+            }
+            sb.append("</div>")
+        }
+    }
+    return sb.toString()
+}
+
 /** Rozbija treść z edytora na: wiadomość, podpis (po „-- ”) i cytat (od „… napisał(a):”) i składa z nich HTML. */
 private fun bodyToHtml(text: String): String {
     val all = text.lines()
@@ -177,8 +229,8 @@ private fun bodyToHtml(text: String): String {
     sb.append("<div style=\"font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222\">")
     if (msg.isNotEmpty()) sb.append("<div>").append(linesToHtml(msg, false)).append("</div>")
     if (sig.isNotEmpty()) {
-        sb.append("<div style=\"margin-top:16px;padding-top:10px;border-top:1px solid #d0d0d0;font-size:12px;line-height:1.55;color:#555\">")
-        sb.append(linesToHtml(sig, true)).append("</div>")
+        sb.append("<div style=\"margin-top:16px;padding-top:10px;border-top:1px solid #d0d0d0;line-height:1.5\">")
+        sb.append(sigToHtml(sig, false)).append("</div>")
     }
     if (quote.isNotEmpty()) {
         sb.append("<div class=\"gmail_quote\" style=\"margin-top:16px;font-size:12px;color:#666\">")
@@ -233,8 +285,8 @@ private fun renderPlain(lines: List<String>): String {
             val sig = if (si >= 0) squeezeBlank(clean.subList(si + 1, clean.size)) else emptyList()
             if (msg.isNotEmpty()) sb.append("<div>").append(linesToHtml(squeezeBlank(msg), false)).append("</div>")
             if (sig.isNotEmpty()) {
-                sb.append("<div style=\"margin-top:12px;padding-top:8px;border-top:1px solid rgba(128,128,128,.4);font-size:13px;color:rgba(128,128,128,1)\">")
-                sb.append(linesToHtml(sig, true)).append("</div>")
+                sb.append("<div style=\"margin-top:12px;padding-top:8px;border-top:1px solid rgba(128,128,128,.4);line-height:1.5\">")
+                sb.append(sigToHtml(sig, true)).append("</div>")
             }
         }
     }
