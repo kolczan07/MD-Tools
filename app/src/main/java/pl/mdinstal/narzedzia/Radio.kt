@@ -454,12 +454,11 @@ fun RadioScreen(onBack: () -> Unit) {
                         SubText("Brak ulubionych. Dotknij gwiazdki przy stacji w zakładce Szukaj, żeby dodać.")
                         Spacer(Modifier.weight(1f))
                     } else {
-                        LazyColumn(modifier = sheet.weight(1f, fill = false)) {
+                        LazyColumn(modifier = sheet.weight(1f)) {
                             items(favs.toList()) { s ->
                                 StationRow(s, isFav = true, current = nowName == s.name, onPlay = { play(s) }, onFav = { toggleFav(s) })
                             }
                         }
-                        Spacer(Modifier.weight(1f))
                     }
                 }
 
@@ -479,7 +478,7 @@ fun RadioScreen(onBack: () -> Unit) {
                         RadioFilterChip("Tylko Polska", onlyPl) { onlyPl = !onlyPl; search() }
                     }
                     if (status.isNotEmpty()) SubText(status, Modifier.padding(bottom = 6.dp))
-                    LazyColumn(modifier = sheet.weight(1f, fill = false)) {
+                    LazyColumn(modifier = sheet.weight(1f)) {
                         items(results) { s ->
                             StationRow(
                                 s,
@@ -490,7 +489,6 @@ fun RadioScreen(onBack: () -> Unit) {
                             )
                         }
                     }
-                    Spacer(Modifier.weight(1f))
                 }
             }
 
@@ -502,8 +500,9 @@ fun RadioScreen(onBack: () -> Unit) {
                     Modifier
                         .fillMaxWidth()
                         .padding(top = 8.dp, bottom = 10.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(cs.surfaceVariant)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(cs.surface)
+                        .border(1.dp, cs.outlineVariant, RoundedCornerShape(20.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -591,7 +590,9 @@ private fun StationAvatar(s: Station, size: Dp, active: Boolean) {
     }
     val logo = bmp
     Box(
-        Modifier.size(size).clip(CircleShape).background(if (logo != null) Color.White else tint.copy(alpha = 0.15f)),
+        Modifier.size(size).clip(CircleShape)
+            .background(if (logo != null) Color.White else tint.copy(alpha = 0.15f))
+            .border(1.dp, if (logo != null) MaterialTheme.colorScheme.outlineVariant else Color.Transparent, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         if (logo != null) {
