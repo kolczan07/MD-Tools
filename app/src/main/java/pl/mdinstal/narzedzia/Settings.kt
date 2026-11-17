@@ -74,21 +74,6 @@ fun SettingsScreen(
                 }
             }
 
-            SectionTitle("Użytkownik")
-            val userCtx = LocalContext.current
-            var appUser by remember { mutableStateOf(Prefs.appUser(userCtx)) }
-            listOf("Marcin", "Daniel").forEach { name ->
-                AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = { Prefs.setAppUser(userCtx, name); appUser = name }) {
-                    Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                            SubText("Powitanie na ekranie głównym i imię w podpisie maili")
-                        }
-                        RadioButton(selected = appUser == name, onClick = { Prefs.setAppUser(userCtx, name); appUser = name })
-                    }
-                }
-            }
-
             SectionTitle("Logowanie")
             NavCard("Ustawienia użytkownika", "Portal IGLU, Asaj.pl, konto Google (kopia na Drive)") { onOpen(Screen.UserSettings) }
 

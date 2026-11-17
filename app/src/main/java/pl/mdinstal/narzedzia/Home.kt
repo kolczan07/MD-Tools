@@ -31,10 +31,7 @@ import androidx.compose.material3.Text
 import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -73,16 +70,6 @@ private val docs = listOf(
 fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     val homeCtx = LocalContext.current
-    var user by remember { mutableStateOf(Prefs.appUser(homeCtx)) }
-    if (user.isBlank()) {
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text("Kto korzysta z aplikacji?") },
-            text = { Text("Imię pojawi się na ekranie głównym i w podpisie maili. Możesz je zmienić w Ustawieniach.") },
-            confirmButton = { TextButton(onClick = { Prefs.setAppUser(homeCtx, "Marcin"); user = "Marcin" }) { Text("Marcin") } },
-            dismissButton = { TextButton(onClick = { Prefs.setAppUser(homeCtx, "Daniel"); user = "Daniel" }) { Text("Daniel") } }
-        )
-    }
     // Najpierw ostatnia znana liczba, potem ciche odświeżenie z Gmaila (bez okien zgody).
     var mailUnread by remember { mutableIntStateOf(Prefs.mailUnread(homeCtx)) }
     LaunchedEffect(Unit) {
@@ -110,12 +97,7 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 Text("MD-Tools", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = cs.onBackground)
-                Text(
-                    if (user.isNotBlank()) "Cześć, $user" else "Panel techniczny",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = cs.onBackground
-                )
+                Text("Panel techniczny", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = cs.onBackground)
                 Text("Narzędzia i serwis", fontSize = 14.sp, color = cs.onSurfaceVariant)
             }
             // Kafelek Ustawienia: zębatka nad napisem, mniejszy niż kafelki narzędzi.
