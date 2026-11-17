@@ -72,6 +72,7 @@ import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -1059,6 +1060,9 @@ private fun avatarColor(s: String): Color = AVATAR_COLORS[(s.lowercase().hashCod
 private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick: () -> Unit, onLongClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val ac = avatarColor(r.who)
+    val dark = cs.background.luminance() < 0.5f
+    val readWeight = if (dark) FontWeight.SemiBold else FontWeight.Bold
+    val unreadWeight = FontWeight.ExtraBold
     AppCard(Modifier.fillMaxWidth().padding(bottom = 8.dp), onClick = onClick, onLongClick = onLongClick) {
         Row(
             Modifier.background(if (selected) cs.primary.copy(alpha = 0.14f) else Color.Transparent)
@@ -1093,7 +1097,7 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
                     Text(
                         r.who.ifBlank { "—" },
                         modifier = Modifier.weight(1f),
-                        fontWeight = if (r.unread) FontWeight.ExtraBold else FontWeight.SemiBold,
+                        fontWeight = if (r.unread) unreadWeight else readWeight,
                         fontSize = 15.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1113,7 +1117,7 @@ private fun MailRowCard(r: MailRow, loading: Boolean, selected: Boolean, onClick
                 }
                 Text(
                     r.subject,
-                    fontWeight = if (r.unread) FontWeight.Bold else FontWeight.SemiBold,
+                    fontWeight = if (r.unread) unreadWeight else readWeight,
                     fontSize = 14.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
