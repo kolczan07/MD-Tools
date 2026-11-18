@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.sp
 
 /** Ustawienia poczty: podpis i powiadomienia o nowych wiadomościach. */
 @Composable
-fun MailSettingsScreen(onBack: () -> Unit) {
+fun MailSettingsScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     val ctx = LocalContext.current
     val cs = MaterialTheme.colorScheme
     var sig by remember { mutableStateOf(Prefs.mailSignature(ctx)) }
@@ -62,7 +62,12 @@ fun MailSettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val acc = Prefs.mailAccount(ctx)
-            SubText(if (acc.isBlank()) "Konto: jeszcze niepołączone (otwórz Pocztę z ekranu głównego)." else "Konto: $acc")
+            AppCard(Modifier.fillMaxWidth(), onClick = onOpenAccounts) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Konta pocztowe", fontWeight = FontWeight.Bold, color = cs.onSurface)
+                    SubText(if (acc.isBlank()) "Jeszcze nie dodano konta. Dodaj konto Google (Gmail) albo skrzynkę IMAP/SMTP." else "Aktywne: $acc. Dotknij, aby przełączyć lub dodać konto.")
+                }
+            }
 
             SectionTitle("Powiadomienia")
             AppCard(Modifier.fillMaxWidth()) {
@@ -80,7 +85,7 @@ fun MailSettingsScreen(onBack: () -> Unit) {
                                 notify = false
                                 status = "Wyłączone."
                             } else if (Prefs.mailAccount(ctx).isBlank()) {
-                                status = "Najpierw otwórz Pocztę i połącz konto Google."
+                                status = "Najpierw dodaj konto pocztowe (Konta pocztowe)."
                             } else if (Build.VERSION.SDK_INT >= 33 && !canNotifyMail(ctx)) {
                                 permission.launch(Manifest.permission.POST_NOTIFICATIONS)
                             } else {

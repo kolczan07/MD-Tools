@@ -145,6 +145,96 @@ object Prefs {
 
     fun setMailAccount(c: Context, email: String) { sp(c).edit().putString("mail_account", email).apply() }
 
+    // ---- Poczta: aktywne konto (Gmail albo IMAP/SMTP) ----
+    // Konto aktywne leży pod stałymi kluczami, więc reszta aplikacji czyta je jak dotąd. Lista wszystkich kont
+    // (hasła w szyfrowanym magazynie) i przełączanie są w MailAccounts.kt.
+
+    /** Rodzaj aktywnego konta: „gmail” (domyślnie, dotychczasowe zachowanie) albo „imap”. */
+    fun mailKind(c: Context): String = sp(c).getString("mail_kind", "gmail") ?: "gmail"
+
+    /** Nazwa nadawcy dla kont IMAP. */
+    fun mailFromName(c: Context): String = sp(c).getString("mail_from_name", "") ?: ""
+    fun mailImapHost(c: Context): String = sp(c).getString("mail_imap_host", "") ?: ""
+    fun mailImapPort(c: Context): Int = sp(c).getInt("mail_imap_port", 993)
+    /** „ssl” albo „starttls”. */
+    fun mailImapSec(c: Context): String = sp(c).getString("mail_imap_sec", "ssl") ?: "ssl"
+    fun mailSmtpHost(c: Context): String = sp(c).getString("mail_smtp_host", "") ?: ""
+    fun mailSmtpPort(c: Context): Int = sp(c).getInt("mail_smtp_port", 465)
+    fun mailSmtpSec(c: Context): String = sp(c).getString("mail_smtp_sec", "ssl") ?: "ssl"
+    /** Login do serwera; gdy pusty, używany jest adres e-mail. */
+    fun mailLogin(c: Context): String = (sp(c).getString("mail_login", "") ?: "").ifBlank { mailAccount(c) }
+    fun mailPassword(c: Context): String = secure(c)?.getString("mail_pass", "") ?: ""
+    /** Czy po wysłaniu zapisywać kopię w Wysłanych (wyłącz, jeśli serwer robi to sam, np. Gmail). */
+    fun mailSaveSent(c: Context): Boolean = sp(c).getBoolean("mail_save_sent", true)
+
+    /** Czy aktywne konto jest gotowe do użycia (Gmail: znany adres; IMAP: komplet danych i hasło). */
+    fun mailConfigured(c: Context): Boolean =
+        if (mailKind(c) == "imap") {
+            mailAccount(c).isNotBlank() && mailImapHost(c).isNotBlank() && mailSmtpHost(c).isNotBlank() && mailPassword(c).isNotEmpty()
+        } else {
+            mailAccount(c).isNotBlank()
+        }
+
+    fun mailActiveId(c: Context): String = sp(c).getString("mail_active_id", "") ?: ""
+    fun setMailActiveId(c: Context, id: String) { sp(c).edit().putString("mail_active_id", id).apply() }
+
+    /** Lista kont jako JSON (bez haseł). */
+    fun mailAccountsJson(c: Context): String = sp(c).getString("mail_accounts", "[]") ?: "[]"
+    fun setMailAccountsJson(c: Context, v: String) { sp(c).edit().putString("mail_accounts", v).apply() }
+
+    /** Hasło konta z listy (szyfrowany magazyn). */
+    fun mailSavedPassword(c: Context, id: String): String = secure(c)?.getString("mail_pass_$id", "") ?: ""
+    fun setMailSavedPassword(c: Context, id: String, pass: String): Boolean {
+        val s = secure(c) ?: return false
+        s.edit().putString("mail_pass_$id", pass).apply()
+        return true
+    }
+    fun removeMailSavedPassword(c: Context, id: String) { secure(c)?.edit()?.remove("mail_pass_$id")?.apply() }
+
+    /** Robi z konta [a] konto aktywne: przepisuje jego dane pod stałe klucze i czyści stan poprzedniego konta. */
+    fun activateMailAccount(c: Context, a: MailAcct, password: String): Boolean {
+        val s = secure(c)
+        if (a.kind == "imap") {
+            if (s == null) return false
+            s.edit().putString("mail_pass", password).apply()
+        } else {
+            s?.edit()?.remove("mail_pass")?.apply()
+        }
+        sp(c).edit()
+            .putString("mail_kind", a.kind)
+            .putString("mail_active_id", a.id)
+            .putString("mail_account", a.email.trim())
+            .putString("mail_from_name", a.fromName.trim())
+            .putString("mail_login", a.login.trim())
+            .putString("mail_imap_host", a.imapHost.trim())
+            .putInt("mail_imap_port", a.imapPort)
+            .putString("mail_imap_sec", a.imapSec)
+            .putString("mail_smtp_host", a.smtpHost.trim())
+            .putInt("mail_smtp_port", a.smtpPort)
+            .putString("mail_smtp_sec", a.smtpSec)
+            .putBoolean("mail_save_sent", a.saveSent)
+            // Punkt odniesienia powiadomień, książka adresowa i licznik dotyczyły poprzedniego konta.
+            .remove("mail_history_id")
+            .remove("mail_contacts")
+            .remove("mail_contacts_ts")
+            .apply()
+        setMailUnread(c, 0)
+        return true
+    }
+
+    /** Czyści aktywne konto (po usunięciu ostatniego konta z listy). */
+    fun clearActiveMail(c: Context) {
+        secure(c)?.edit()?.remove("mail_pass")?.apply()
+        sp(c).edit()
+            .putString("mail_kind", "gmail")
+            .remove("mail_active_id").remove("mail_account").remove("mail_from_name").remove("mail_login")
+            .remove("mail_imap_host").remove("mail_imap_port").remove("mail_imap_sec")
+            .remove("mail_smtp_host").remove("mail_smtp_port").remove("mail_smtp_sec")
+            .remove("mail_history_id").remove("mail_contacts").remove("mail_contacts_ts")
+            .apply()
+        setMailUnread(c, 0)
+    }
+
     /** Nadawcy (adresy e-mail, małe litery), od których poczta od razu ładuje obrazy. */
     fun trustedSenders(c: Context): List<String> =
         (sp(c).getString("mail_trusted", "") ?: "").split("\n").filter { it.isNotBlank() }

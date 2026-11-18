@@ -190,8 +190,15 @@ fun App(openMail: Boolean, onMailOpened: () -> Unit, openTarget: String?, onTarg
                 Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
                 Screen.Wifi -> WifiScreen(onBack = { back() })
                 Screen.Lan -> LanScreen(onBack = { back() })
-                Screen.Mail -> MailScreen(onBack = { back() })
-                Screen.MailSettings -> MailSettingsScreen(onBack = { back() })
+                Screen.Mail -> MailScreen(onBack = { back() }, onOpenAccounts = { go(Screen.MailAccounts) })
+                Screen.MailSettings -> MailSettingsScreen(onBack = { back() }, onOpenAccounts = { go(Screen.MailAccounts) })
+                Screen.MailAccounts -> MailAccountsScreen(
+                    onBack = { back() },
+                    onOpenImap = { go(Screen.MailImap) },
+                    // Poczta zastępuje ekran kont, żeby „wstecz” wróciło tam, skąd użytkownik przyszedł.
+                    onOpenMail = { back(); if (stack.last() != Screen.Mail) go(Screen.Mail) }
+                )
+                Screen.MailImap -> MailImapScreen(onBack = { back() })
                 Screen.Sadp -> SadpScreen(onBack = { back() })
                 Screen.Weather -> WeatherScreen(onBack = { back() })
                 Screen.Iglutech -> IglutechScreen(onBack = { back() }, openSerial = pendingSerial)

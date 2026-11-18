@@ -53,6 +53,10 @@ object MailNotify {
         if (!Prefs.mailNotify(c)) return@withLock
         val account = Prefs.mailAccount(c)
         if (account.isBlank()) return@withLock
+        if (MailApi.isImap(c)) {
+            checkImap(c, account)
+            return@withLock
+        }
         try {
             val auth = GmailApi.authorize(c, account)
             // Bez zgody w tle nie da się nic zrobić — czekamy aż użytkownik wejdzie w Pocztę.
@@ -82,6 +86,27 @@ object MailNotify {
                 try { GmailApi.messageRow(token, id) } catch (e: Exception) { null }
             }.filter { !it.fromEmail.equals(mine, ignoreCase = true) }
             if (rows.isNotEmpty()) post(c, rows.map { it.row }, maxOf(0, ids.size - rows.size))
+        } catch (e: Exception) {
+        }
+    }
+
+    /** Sprawdzenie skrzynki IMAP: licznik nieprzeczytanych i nowe wiadomości od ostatniego punktu odniesienia. */
+    private fun checkImap(c: Context, account: String) {
+        if (!Prefs.mailConfigured(c)) return
+        try {
+            try { Prefs.setMailUnread(c, ImapApi.inboxUnread(c)) } catch (e: Exception) { }
+            val last = Prefs.mailHistoryId(c)
+            if (last.isEmpty()) {
+                // Pierwszy przebieg tylko ustawia punkt odniesienia, bez powiadamiania o starych mailach.
+                Prefs.setMailHistoryId(c, ImapApi.historyMark(c))
+                return
+            }
+            val (found, mark) = ImapApi.newInbox(c, last)
+            Prefs.setMailHistoryId(c, mark)
+            val mine = account.lowercase()
+            val items = found.filter { !it.fromEmail.equals(mine, ignoreCase = true) }
+            if (items.isEmpty()) return
+            post(c, items.take(5).map { it.row }, maxOf(0, items.size - 5))
         } catch (e: Exception) {
         }
     }

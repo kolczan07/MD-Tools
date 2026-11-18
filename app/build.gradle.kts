@@ -60,6 +60,12 @@ android {
         compose = true
         buildConfig = true
     }
+    // JavaMail i activation niosą te same pliki licencji — bierzemy pierwszy z brzegu.
+    packaging {
+        resources {
+            pickFirsts += listOf("META-INF/NOTICE.md", "META-INF/LICENSE.md", "META-INF/NOTICE", "META-INF/LICENSE", "META-INF/DEPENDENCIES")
+        }
+    }
     // composeOptions USUNIĘTE — od Kotlina 2.0 plugin sam dobiera wersję kompilatora
 
     applicationVariants.all {
@@ -99,6 +105,10 @@ dependencies {
 
     // Powiadomienia o nowej poczcie (sprawdzanie w tle co ok. 15 min)
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+
+    // Poczta: IMAP + SMTP (JavaMail dla Androida)
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
 
     // Updater — HTTP + JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

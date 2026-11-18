@@ -53,6 +53,10 @@ fun UserSettingsScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
                 if (Prefs.camCreds(ctx) != null) "Login i hasło zapisane" else "Domyślny login i hasło do kamer (SADP)"
             ) { onOpen(Screen.CamSettings) }
             SettingsNavCard(
+                "Konta pocztowe",
+                if (Prefs.mailAccount(ctx).isBlank()) "Dodaj konto Google (Gmail) albo skrzynkę IMAP/SMTP" else "Aktywne: " + Prefs.mailAccount(ctx)
+            ) { onOpen(Screen.MailAccounts) }
+            SettingsNavCard(
                 "Poczta",
                 if (Prefs.mailNotify(ctx)) "Powiadomienia włączone, podpis i ustawienia" else "Podpis i powiadomienia o nowych wiadomościach"
             ) { onOpen(Screen.MailSettings) }

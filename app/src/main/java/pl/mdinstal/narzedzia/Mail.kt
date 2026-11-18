@@ -499,8 +499,8 @@ suspend fun refreshMailContacts(ctx: Context, token: String) {
             if (n.isNotBlank() && !n.contains("@") && names[e].isNullOrEmpty()) names[e] = n
         }
     }
-    GmailApi.recentHeaders(token, "SENT", 80, listOf("To", "Cc")).forEach { (to, cc) -> take(to, 3); take(cc, 2) }
-    GmailApi.recentHeaders(token, "INBOX", 80, listOf("From")).forEach { (f) -> take(f, 1) }
+    MailApi.recentHeaders(ctx, token, "SENT", 80, listOf("To", "Cc")).forEach { (to, cc) -> take(to, 3); take(cc, 2) }
+    MailApi.recentHeaders(ctx, token, "INBOX", 80, listOf("From")).forEach { (f) -> take(f, 1) }
     Prefs.setMailContacts(ctx, counts.map { (e, c) -> MailContact(e, names[e].orEmpty(), c) })
 }
 
@@ -543,11 +543,11 @@ private fun unescapeHtml(s: String): String =
     s.replace("&#39;", "'").replace("&quot;", "\"").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
 
 /** Sam adres e-mail z nagłówka From, małymi literami. */
-private fun senderEmail(h: String): String =
+internal fun senderEmail(h: String): String =
     (if (h.contains("<")) h.substringAfter("<").substringBefore(">") else h).trim().lowercase()
 
 /** „Imię Nazwisko <adres>” → „Imię Nazwisko” (albo sam adres). */
-private fun senderName(h: String): String {
+internal fun senderName(h: String): String {
     if (h.isBlank()) return ""
     val name = h.substringBefore("<").trim().trim('"').trim()
     if (name.isNotEmpty() && h.contains("<")) return name
@@ -652,10 +652,11 @@ private fun openFile(ctx: Context, a: MailAttachment, f: File) {
 private val FOLDERS = listOf("INBOX" to "Odebrane", "SENT" to "Wysłane", "DRAFT" to "Robocze", "TRASH" to "Kosz")
 
 @Composable
-fun MailScreen(onBack: () -> Unit) {
+fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var token by remember { mutableStateOf<String?>(null) }
+    val multiAccounts = remember { MailAccounts.all(ctx).size > 1 }
     var folder by remember { mutableStateOf("INBOX") }
     var query by remember { mutableStateOf("") }
     var onlyUnread by remember { mutableStateOf(false) }
@@ -675,7 +676,7 @@ fun MailScreen(onBack: () -> Unit) {
 
     /** Wywołanie API z jednym ponowieniem po odświeżeniu wygasłego tokenu. */
     suspend fun <T> api(block: suspend (String) -> T): T = withContext(Dispatchers.IO) {
-        val t = token ?: throw IOException("Brak połączenia z Google.")
+        val t = token ?: throw IOException(if (MailApi.isImap(ctx)) "Brak połączenia z kontem pocztowym." else "Brak połączenia z Google.")
         try {
             block(t)
         } catch (e: MailUnauthorized) {
@@ -691,7 +692,7 @@ fun MailScreen(onBack: () -> Unit) {
 
     /** Odświeża licznik nieprzeczytanych (kafelek na ekranie głównym). */
     suspend fun updateUnread() {
-        try { Prefs.setMailUnread(ctx, api { t -> GmailApi.inboxUnread(t) }) }
+        try { Prefs.setMailUnread(ctx, api { t -> MailApi.inboxUnread(ctx, t) }) }
         catch (e: CancellationException) { throw e }
         catch (e: Exception) { }
     }
@@ -708,11 +709,11 @@ fun MailScreen(onBack: () -> Unit) {
             try {
                 val label = folder
                 val q = searchQuery()
-                val (ids, next) = api { t -> GmailApi.listThreads(t, label, if (more) nextToken else null, q) }
-                val fetched = api { t -> GmailApi.rows(t, ids, label) }
+                val (fetched, next) = api { t -> MailApi.list(ctx, t, label, if (more) nextToken else null, query.trim(), onlyUnread && label == "INBOX") }
                 if (label == folder && q == searchQuery()) {
                     if (!more) rows.clear()
-                    rows.addAll(fetched)
+                    // Wątek może zahaczać o dwie strony listy (IMAP) — nie dublujemy wierszy.
+                    rows.addAll(fetched.filter { n -> rows.none { it.id == n.id } })
                     nextToken = next
                 }
                 if (label == "INBOX") updateUnread()
@@ -729,7 +730,10 @@ fun MailScreen(onBack: () -> Unit) {
     fun onToken(t: String, email: String?) {
         token = t
         needsConnect = false
-        if (!email.isNullOrBlank()) Prefs.setMailAccount(ctx, email)
+        if (!email.isNullOrBlank() && !MailApi.isImap(ctx)) {
+            Prefs.setMailAccount(ctx, email)
+            MailAccounts.registerGoogle(ctx, email)
+        }
         load(false)
         // Książkę adresową odświeżamy w tle, najwyżej raz na dobę.
         if (Prefs.mailContactsAge(ctx) > 24L * 3600 * 1000) {
@@ -759,6 +763,11 @@ fun MailScreen(onBack: () -> Unit) {
     }
 
     fun connect() {
+        if (MailApi.isImap(ctx)) {
+            // IMAP/SMTP: bez Google — wystarczy, że konto jest skonfigurowane (hasło leży w szyfrowanym magazynie).
+            if (Prefs.mailConfigured(ctx)) onToken("imap", Prefs.mailAccount(ctx)) else needsConnect = true
+            return
+        }
         scope.launch {
             busy = true
             status = ""
@@ -797,7 +806,7 @@ fun MailScreen(onBack: () -> Unit) {
             busy = true
             status = ""
             try {
-                api { t -> GmailApi.deleteAllTrash(t) }
+                api { t -> MailApi.deleteAllTrash(ctx, t) }
                 rows.clear()
                 nextToken = null
             } catch (e: CancellationException) {
@@ -814,12 +823,12 @@ fun MailScreen(onBack: () -> Unit) {
         scope.launch {
             openingId = id
             try {
-                val t = api { tk -> GmailApi.getThread(tk, id) }
+                val t = api { tk -> MailApi.getThread(ctx, tk, id) }
                 thread = t
                 val idx = rows.indexOfFirst { it.id == id }
                 if (idx >= 0 && rows[idx].unread) {
                     rows[idx] = rows[idx].copy(unread = false)
-                    try { api { tk -> GmailApi.markRead(tk, id) } } catch (e: Exception) { }
+                    try { api { tk -> MailApi.markRead(ctx, tk, id) } } catch (e: Exception) { }
                     updateUnread()
                 }
             } catch (e: CancellationException) {
@@ -842,7 +851,7 @@ fun MailScreen(onBack: () -> Unit) {
             var failed = 0
             ids.forEach { id ->
                 try {
-                    api { tk -> GmailApi.markRead(tk, id) }
+                    api { tk -> MailApi.markRead(ctx, tk, id) }
                     val idx = rows.indexOfFirst { it.id == id }
                     if (idx >= 0) rows[idx] = rows[idx].copy(unread = false)
                 } catch (e: CancellationException) {
@@ -867,7 +876,7 @@ fun MailScreen(onBack: () -> Unit) {
             var failed = 0
             ids.forEach { id ->
                 try {
-                    api { tk -> GmailApi.trash(tk, id) }
+                    api { tk -> MailApi.trash(ctx, tk, id) }
                     rows.removeAll { it.id == id }
                 } catch (e: CancellationException) {
                     throw e
@@ -887,7 +896,7 @@ fun MailScreen(onBack: () -> Unit) {
             init = comp,
             contacts = contacts,
             onSend = { d ->
-                api { t -> GmailApi.send(t, buildRaw(ctx, d), d.threadId) }
+                api { t -> MailApi.send(ctx, t, buildRaw(ctx, d), d.threadId) }
                 // Adresaci wysłanej wiadomości trafiają od razu do podpowiedzi.
                 val add = (splitAddrs(d.to.replace(";", ",")) + splitAddrs(d.cc.replace(";", ",")))
                     .map { senderEmail(it) }.filter { it.contains("@") }
@@ -898,7 +907,7 @@ fun MailScreen(onBack: () -> Unit) {
                     contacts = Prefs.mailContacts(ctx)
                 }
             },
-            onSaveDraft = { d -> api { t -> GmailApi.saveDraft(t, buildRaw(ctx, d), d.threadId) } },
+            onSaveDraft = { d -> api { t -> MailApi.saveDraft(ctx, t, buildRaw(ctx, d), d.threadId) } },
             onClose = { sent ->
                 compose = null
                 if (sent) {
@@ -933,11 +942,11 @@ fun MailScreen(onBack: () -> Unit) {
                 }
             },
             onOpenPdf = { name, f -> pdfView = name to f },
-            fetchAttachment = { a -> api { tk -> GmailApi.attachment(tk, a.messageId, a.attachmentId) } },
+            fetchAttachment = { a -> api { tk -> MailApi.attachment(ctx, tk, a.messageId, a.attachmentId) } },
             onTrash = {
                 scope.launch {
                     try {
-                        api { tk -> GmailApi.trash(tk, cur.id) }
+                        api { tk -> MailApi.trash(ctx, tk, cur.id) }
                         rows.removeAll { it.id == cur.id }
                         thread = null
                     } catch (e: CancellationException) {
@@ -950,7 +959,7 @@ fun MailScreen(onBack: () -> Unit) {
             onRestore = {
                 scope.launch {
                     try {
-                        api { tk -> GmailApi.untrash(tk, cur.id) }
+                        api { tk -> MailApi.untrash(ctx, tk, cur.id) }
                         rows.removeAll { it.id == cur.id }
                         thread = null
                     } catch (e: CancellationException) {
@@ -1012,6 +1021,12 @@ fun MailScreen(onBack: () -> Unit) {
                     }
                 }
             }
+            if (token != null && multiAccounts) {
+                // Kilka kont: aktywne widać od razu, dotknięcie otwiera listę kont do przełączenia.
+                TextButton(onClick = onOpenAccounts, modifier = Modifier.padding(top = 4.dp)) {
+                    Text(Prefs.mailAccount(ctx) + "  ▾", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
             if (token != null) {
                 Row(
                     Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -1040,12 +1055,25 @@ fun MailScreen(onBack: () -> Unit) {
                 }
             }
             if (needsConnect) {
-                SubText(
-                    "Poczta wymaga zgody na dostęp do Gmaila na koncie firmowym. Użyj konta w domenie firmy.",
-                    Modifier.padding(top = 16.dp)
-                )
-                Button(enabled = !busy, onClick = { connect() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-                    Text("Połącz z Gmailem")
+                if (MailApi.isImap(ctx)) {
+                    SubText(
+                        "To konto pocztowe nie jest jeszcze w pełni skonfigurowane (brakuje serwerów albo hasła).",
+                        Modifier.padding(top = 16.dp)
+                    )
+                    Button(enabled = !busy, onClick = onOpenAccounts, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                        Text("Konta pocztowe")
+                    }
+                } else {
+                    SubText(
+                        "Poczta wymaga zgody na dostęp do Gmaila na koncie firmowym. Użyj konta w domenie firmy.",
+                        Modifier.padding(top = 16.dp)
+                    )
+                    Button(enabled = !busy, onClick = { connect() }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                        Text("Połącz z Gmailem")
+                    }
+                    OutlinedButton(enabled = !busy, onClick = onOpenAccounts, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Text("Inne konto pocztowe (IMAP)")
+                    }
                 }
             }
             if (status.isNotEmpty()) {
@@ -1444,7 +1472,7 @@ private fun MailThreadView(
         AlertDialog(
             onDismissRequest = { confirm = false },
             title = { Text("Przenieść rozmowę do kosza?") },
-            text = { Text("Wiadomości zostaną w koszu przez 30 dni, potem Gmail usunie je na stałe.") },
+            text = { Text(if (MailApi.isImap(LocalContext.current)) "Wiadomości trafią do kosza. Usuniesz je na stałe, opróżniając kosz." else "Wiadomości zostaną w koszu przez 30 dni, potem Gmail usunie je na stałe.") },
             confirmButton = { TextButton(onClick = { confirm = false; onTrash() }) { Text("Usuń") } },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Anuluj") } }
         )
