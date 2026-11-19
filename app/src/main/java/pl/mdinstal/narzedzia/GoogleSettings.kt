@@ -34,12 +34,12 @@ import java.util.Locale
 @Composable
 fun UserSettingsScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
     val ctx = LocalContext.current
-    AppScaffold("Ustawienia użytkownika", onBack) { pad ->
+    AppScaffold("Konta i integracje", onBack) { pad ->
         Column(
             Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad)
                 .verticalScroll(rememberScrollState()).padding(16.dp)
         ) {
-            SectionTitle("Konta i logowanie")
+            SectionTitle("Logowanie i dane dostępowe")
             SettingsNavCard(
                 "Portal IGLU",
                 if (Prefs.hasCreds(ctx)) "Login i hasło zapisane" else "Login i hasło do portalu Iglutech"
@@ -53,12 +53,8 @@ fun UserSettingsScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
                 if (Prefs.camCreds(ctx) != null) "Login i hasło zapisane" else "Domyślny login i hasło do kamer (SADP)"
             ) { onOpen(Screen.CamSettings) }
             SettingsNavCard(
-                "Konta pocztowe",
-                if (Prefs.mailAccount(ctx).isBlank()) "Dodaj konto Google (Gmail) albo skrzynkę IMAP/SMTP" else "Aktywne: " + Prefs.mailAccount(ctx)
-            ) { onOpen(Screen.MailAccounts) }
-            SettingsNavCard(
                 "Poczta",
-                if (Prefs.mailNotify(ctx)) "Powiadomienia włączone, podpis i ustawienia" else "Podpis i powiadomienia o nowych wiadomościach"
+                if (Prefs.mailAccount(ctx).isBlank()) "Konta Gmail/IMAP, powiadomienia, podpis" else "Aktywne: " + Prefs.mailAccount(ctx)
             ) { onOpen(Screen.MailSettings) }
             SettingsNavCard(
                 "Google",

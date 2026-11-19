@@ -85,11 +85,8 @@ fun SettingsScreen(
                 onSelect = { Prefs.setAppUser(userCtx, it); appUser = it }
             )
 
-            SectionTitle("Poczta")
-            NavCard("Konta pocztowe", "Dodaj konto Google (Gmail) albo IMAP, przełączanie kont") { onOpen(Screen.MailAccounts) }
-
-            SectionTitle("Logowanie")
-            NavCard("Ustawienia użytkownika", "Portal IGLU, Asaj.pl, konto Google (kopia na Drive)") { onOpen(Screen.UserSettings) }
+            SectionTitle("Konta i integracje")
+            NavCard("Konta i integracje", "Portal IGLU, Asaj.pl, kamery, poczta, Google Drive") { onOpen(Screen.UserSettings) }
 
             SectionTitle("Skróty")
             NavCard("Skróty do aplikacji", "Wybrane aplikacje pojawią się na ekranie głównym w sekcji Aplikacje") { onOpen(Screen.Shortcuts) }
