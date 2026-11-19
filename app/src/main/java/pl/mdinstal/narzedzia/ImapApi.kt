@@ -324,11 +324,23 @@ object ImapApi {
     private val listCache = java.util.concurrent.ConcurrentHashMap<String, Pair<List<MailRow>, String?>>()
 
     /** Ostatnio pobrana pierwsza strona listy folderu (do natychmiastowego pokazania przed odświeżeniem). */
-    fun cachedList(ctx: Context, role: String): Pair<List<MailRow>, String?>? = listCache[Prefs.mailAccount(ctx) + "|" + role]
+    fun cachedList(ctx: Context, role: String): Pair<List<MailRow>, String?>? {
+        val key = Prefs.mailAccount(ctx) + "|" + role
+        listCache[key]?.let { return it }
+        // Po uruchomieniu aplikacji pamięć jest pusta — bierzemy listę zapisaną na dysku.
+        return MailDiskCache.loadList(ctx, role)?.also { listCache[key] = it }
+    }
+
+    /** Czas najnowszej wiadomości wątku wg ostatniej listy: gdy się zmieni, zapisany na dysku wątek jest nieaktualny. */
+    private val rowTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     fun list(ctx: Context, role: String, page: String?, text: String, unreadOnly: Boolean): Pair<List<MailRow>, String?> {
         val res = listFresh(ctx, role, page, text, unreadOnly)
-        if (page == null && text.isBlank() && !unreadOnly) listCache[Prefs.mailAccount(ctx) + "|" + role] = res
+        res.first.forEach { rowTimes[it.id] = it.time }
+        if (page == null && text.isBlank() && !unreadOnly) {
+            listCache[Prefs.mailAccount(ctx) + "|" + role] = res
+            MailDiskCache.saveList(ctx, role, res.first, res.second)
+        }
         return res
     }
 
@@ -533,7 +545,9 @@ object ImapApi {
         if (System.currentTimeMillis() - c.at > CACHE_TTL_MS) { threadCache.remove(id); null } else c.thread
     }
 
-    private fun forget(id: String) { synchronized(threadCache) { threadCache.remove(id) } }
+    private fun forget(id: String) {
+        synchronized(threadCache) { threadCache.remove(id) }
+    }
 
     /** Po załadowaniu listy pobiera w tle treść kilku najnowszych wątków, żeby ich otwarcie było od razu. */
     fun prefetch(ctx: Context, ids: List<String>) {
@@ -545,8 +559,17 @@ object ImapApi {
 
     fun getThread(ctx: Context, id: String): MailThread {
         cachedThread(id)?.let { return it }
+        // Wątek zapisany na dysku jest dobry, dopóki lista nie pokazała nowszej wiadomości w tym wątku.
+        MailDiskCache.loadThread(ctx, id)?.let { (t, savedAt) ->
+            val now = rowTimes[id]
+            if (now == null || now == savedAt) {
+                synchronized(threadCache) { threadCache[id] = CachedThread(t, System.currentTimeMillis()) }
+                return t
+            }
+        }
         val t = loadThread(ctx, id)
         synchronized(threadCache) { threadCache[id] = CachedThread(t, System.currentTimeMillis()) }
+        MailDiskCache.saveThread(ctx, t, rowTimes[id] ?: t.messages.maxOfOrNull { it.time } ?: 0L)
         return t
     }
 
@@ -721,11 +744,13 @@ object ImapApi {
 
     fun trash(ctx: Context, id: String) {
         forget(id)
+        MailDiskCache.removeThread(ctx, id)
         onThread(ctx, id, true) { f, msgs, store -> moveTo(ctx, store, f, msgs, "TRASH") }
     }
 
     fun untrash(ctx: Context, id: String) {
         forget(id)
+        MailDiskCache.removeThread(ctx, id)
         onThread(ctx, id, true) { f, msgs, store -> moveTo(ctx, store, f, msgs, "INBOX") }
     }
 

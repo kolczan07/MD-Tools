@@ -731,7 +731,7 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
                     nextToken = next
                     if (!more && MailApi.isImap(ctx)) {
                         // Treść najnowszych wątków pobieramy w tle, żeby otwierały się od razu.
-                        val top = rows.take(8).map { it.id }
+                        val top = rows.take(15).map { it.id }
                         scope.launch(Dispatchers.IO) { try { MailApi.prefetch(ctx, top) } catch (e: Exception) { } }
                     }
                 }
