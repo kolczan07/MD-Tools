@@ -197,7 +197,24 @@ object ImapApi {
     }
 
     /** Sprawdza logowanie do IMAP i SMTP z podanymi ustawieniami. Rzuca IOException z czytelnym opisem. */
-    fun verify(cfg: ImapCfg) {
+    private fun trySmtp(cfg: ImapCfg, port: Int, sec: String) {
+        val proto = protoSmtp(sec)
+        val props = baseProps(proto, sec)
+        props["mail.$proto.auth"] = "true"
+        val tr = Session.getInstance(props).getTransport(proto)
+        try {
+            tr.connect(cfg.smtpHost, port, cfg.login, cfg.password)
+        } finally {
+            try { tr.close() } catch (e: Exception) { }
+        }
+    }
+
+    /**
+     * Sprawdza IMAP (błąd = wyjątek), potem SMTP. Gdy SMTP na wpisanym porcie nie odpowiada, próbuje typowych
+     * alternatyw (465 SSL / 587 STARTTLS). Zwraca działającą parę (port, zabezpieczenie) albo null, jeśli wpisana działa.
+     * Gdy nie działa żadna, rzuca wyjątek z informacją, że odbieranie jest w porządku.
+     */
+    fun verify(cfg: ImapCfg): Pair<Int, String>? {
         guard {
             val store = openStore(cfg)
             try {
@@ -208,17 +225,21 @@ object ImapApi {
                 try { store.close() } catch (e: Exception) { }
             }
         }
-        guard {
-            val proto = protoSmtp(cfg.smtpSec)
-            val props = baseProps(proto, cfg.smtpSec)
-            props["mail.$proto.auth"] = "true"
-            val tr = Session.getInstance(props).getTransport(proto)
-            try {
-                tr.connect(cfg.smtpHost, cfg.smtpPort, cfg.login, cfg.password)
-            } finally {
-                try { tr.close() } catch (e: Exception) { }
-            }
+        var first: Exception? = null
+        try {
+            guard { trySmtp(cfg, cfg.smtpPort, cfg.smtpSec) }
+            return null
+        } catch (e: Exception) {
+            first = e
         }
+        for ((port, sec) in listOf(587 to "starttls", 465 to "ssl")) {
+            if (port == cfg.smtpPort && sec == cfg.smtpSec) continue
+            try {
+                guard { trySmtp(cfg, port, sec) }
+                return port to sec
+            } catch (e: Exception) { }
+        }
+        throw java.io.IOException("Odbieranie poczty działa, ale wysyłanie nie (SMTP " + cfg.smtpHost + ":" + cfg.smtpPort + "): " + (first?.message ?: ""))
     }
 
     // ───────────────────────── foldery ─────────────────────────
