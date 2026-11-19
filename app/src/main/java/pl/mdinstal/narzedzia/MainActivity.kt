@@ -101,7 +101,8 @@ fun App(openMail: Boolean, onMailOpened: () -> Unit, openTarget: String?, onTarg
     // Synchronizacja listy pomp przy każdym uruchomieniu aplikacji.
     var syncActive by remember { mutableStateOf(true) }
     LaunchedEffect(Unit) {
-        delay(1000)
+        // Z powiadomienia o poczcie nie robimy pełnej animacji, żeby nie opóźniać otwarcia skrzynki.
+        delay(if (openMail || openTarget != null) 300L else 1600L)
         splash = false
         // Automatyczne sprawdzenie wydań, najwyżej raz na 6 godzin.
         val now = System.currentTimeMillis()
@@ -220,20 +221,7 @@ fun App(openMail: Boolean, onMailOpened: () -> Unit, openTarget: String?, onTarg
         autoUpdate?.let { UpdateDialog(it) { autoUpdate = null } }
 
         AnimatedVisibility(visible = splash, exit = fadeOut()) {
-            Column(
-                Modifier.fillMaxSize().background(Color(0xFF0F172A)).padding(24.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("MD-Tools", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.ExtraBold)
-                Text(
-                    "PANEL TECHNICZNY",
-                    color = Color(0xFF94A3B8),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
+            BootLogo(if (themeMode == "oled") Color.Black else Color(0xFF0F172A))
         }
     }
 }
