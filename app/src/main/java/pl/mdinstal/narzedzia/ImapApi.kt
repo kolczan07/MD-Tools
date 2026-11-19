@@ -123,6 +123,9 @@ object ImapApi {
             throw e
         } catch (e: Exception) {
             throw IOException(friendly(e), e)
+        } catch (e: Throwable) {
+            // np. NoClassDefFoundError z JavaMail — pokazujemy komunikat zamiast zamykać aplikację.
+            throw IOException("Błąd biblioteki poczty: " + e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""), e)
         }
     }
 
@@ -326,15 +329,24 @@ object ImapApi {
             val uid = key.substring(1).toLongOrNull() ?: return emptyList()
             return listOfNotNull(f.getMessageByUID(uid))
         }
-        val candidates: Array<Message> = try {
-            f.search(SubjectTerm(key))
+        var found: List<Message> = emptyList()
+        try {
+            val candidates = f.search(SubjectTerm(key))
+            fetchEnvelopes(f, candidates)
+            found = candidates.filter { normSubject(subjectOf(it)) == key }
         } catch (e: Exception) {
             // Serwer nie obsługuje wyszukiwania ze znakami spoza ASCII — przeglądamy ostatnie wiadomości sami.
-            val n = f.messageCount
-            if (n < 1) emptyArray() else f.getMessages(maxOf(1, n - 400 + 1), n)
         }
-        fetchEnvelopes(f, candidates)
-        return candidates.filter { normSubject(subjectOf(it)) == key }
+        if (found.isEmpty()) {
+            // Serwer nic nie znalazł (inne kodowanie tematu, znaki spoza ASCII) — przeglądamy ostatnie wiadomości sami.
+            val n = f.messageCount
+            if (n > 0) {
+                val window = f.getMessages(maxOf(1, n - 800 + 1), n)
+                fetchEnvelopes(f, window)
+                found = window.filter { normSubject(subjectOf(it)) == key }
+            }
+        }
+        return found
     }
 
     private fun rolesFor(role: String): List<String> = when (role) {
@@ -445,7 +457,17 @@ object ImapApi {
                 val arr = msgs.toTypedArray()
                 fetchEnvelopes(f, arr)
                 for (m in arr) {
-                    val mm = toMailMessage(r, f, m)
+                    val mm = try {
+                        toMailMessage(r, f, m)
+                    } catch (e: Exception) {
+                        // Jedna nieczytelna wiadomość nie może blokować całej rozmowy.
+                        MailMessage(
+                            id = "$r|" + (try { uidOf(f, m) } catch (x: Exception) { 0L }),
+                            from = fromOf(m), to = toOf(m), time = timeOf(m), html = null,
+                            text = "Nie udało się odczytać treści tej wiadomości: " + (e.message ?: e.javaClass.simpleName),
+                            attachments = emptyList(), unread = false, snippet = ""
+                        )
+                    }
                     collected.add(mm.time to mm)
                 }
                 if (subject.isEmpty()) subject = subjectOf(arr.minByOrNull { timeOf(it) } ?: arr.first())
@@ -453,6 +475,7 @@ object ImapApi {
                 try { f.close(false) } catch (e: Exception) { }
             }
         }
+        if (collected.isEmpty()) throw IOException("Nie znaleziono tej wiadomości na serwerze (mogła zostać przeniesiona albo usunięta). Odśwież listę.")
         val list = collected.sortedBy { it.first }.map { it.second }
         MailThread(id, subject.ifBlank { "(bez tematu)" }, list)
     }

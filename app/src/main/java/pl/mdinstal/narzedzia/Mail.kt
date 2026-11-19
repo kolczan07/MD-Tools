@@ -656,7 +656,6 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var token by remember { mutableStateOf<String?>(null) }
-    val multiAccounts = remember { MailAccounts.all(ctx).size > 1 }
     var folder by remember { mutableStateOf("INBOX") }
     var query by remember { mutableStateOf("") }
     var onlyUnread by remember { mutableStateOf(false) }
@@ -1021,10 +1020,13 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
                     }
                 }
             }
-            if (token != null && multiAccounts) {
-                // Kilka kont: aktywne widać od razu, dotknięcie otwiera listę kont do przełączenia.
-                TextButton(onClick = onOpenAccounts, modifier = Modifier.padding(top = 4.dp)) {
-                    Text(Prefs.mailAccount(ctx) + "  ▾", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (token != null) {
+                // Aktywne konto widać od razu; dotknięcie otwiera listę kont (przełączanie i „Dodaj konto”).
+                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onOpenAccounts, modifier = Modifier.weight(1f)) {
+                        Text(Prefs.mailAccount(ctx) + "  ▾", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    }
+                    TextButton(onClick = onOpenAccounts) { Text("+ Dodaj konto", fontSize = 13.sp) }
                 }
             }
             if (token != null) {
