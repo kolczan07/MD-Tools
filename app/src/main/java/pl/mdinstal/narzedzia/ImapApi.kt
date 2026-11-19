@@ -114,6 +114,14 @@ object ImapApi {
         }
     }
 
+    /** Skrót do diagnozy: klasa pierwotnego błędu i miejsce w kodzie aplikacji, np. „[MessagingException @ walk:381]”. */
+    private fun diag(e: Throwable): String {
+        val chain = generateSequence(e) { it.cause }.toList()
+        val pkg = ImapApi::class.java.name.substringBeforeLast('.')
+        val frame = chain.flatMap { it.stackTrace.asList() }.firstOrNull { it.className.startsWith(pkg) }
+        return " [" + chain.last().javaClass.simpleName + (frame?.let { " @ ${it.methodName}:${it.lineNumber}" } ?: "") + "]"
+    }
+
     private fun <T> guard(block: () -> T): T {
         try {
             return block()
@@ -122,7 +130,7 @@ object ImapApi {
         } catch (e: IOException) {
             throw e
         } catch (e: Exception) {
-            throw IOException(friendly(e), e)
+            throw IOException(friendly(e) + diag(e), e)
         } catch (e: Throwable) {
             // np. NoClassDefFoundError z JavaMail — pokazujemy komunikat zamiast zamykać aplikację.
             throw IOException("Błąd biblioteki poczty: " + e.javaClass.simpleName + (e.message?.let { ": $it" } ?: ""), e)

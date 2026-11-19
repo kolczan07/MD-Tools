@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
@@ -51,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -656,6 +659,10 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var token by remember { mutableStateOf<String?>(null) }
+    var accountsVer by remember { mutableIntStateOf(0) }
+    val accounts = remember(accountsVer) { MailAccounts.all(ctx) }
+    var activeEmail by remember { mutableStateOf(Prefs.mailAccount(ctx)) }
+    var accountMenu by remember { mutableStateOf(false) }
     var folder by remember { mutableStateOf("INBOX") }
     var query by remember { mutableStateOf("") }
     var onlyUnread by remember { mutableStateOf(false) }
@@ -729,6 +736,7 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
     fun onToken(t: String, email: String?) {
         token = t
         needsConnect = false
+        activeEmail = Prefs.mailAccount(ctx).ifBlank { email.orEmpty() }
         if (!email.isNullOrBlank() && !MailApi.isImap(ctx)) {
             Prefs.setMailAccount(ctx, email)
             MailAccounts.registerGoogle(ctx, email)
@@ -797,6 +805,29 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
 
     LaunchedEffect(Unit) {
         File(ctx.cacheDir, "mail").deleteRecursively()
+        connect()
+    }
+
+    /** Przełącza skrzynkę w miejscu: jedno dotknięcie na liście rozsuwanej i od razu widać pocztę wybranego konta. */
+    fun switchTo(a: MailAcct) {
+        if (busy || MailAccounts.isActive(ctx, a)) return
+        if (!MailAccounts.activate(ctx, a)) {
+            status = "Nie udało się odczytać hasła z magazynu kluczy."
+            return
+        }
+        token = null
+        thread = null
+        rows.clear()
+        selected.clear()
+        nextToken = null
+        folder = "INBOX"
+        query = ""
+        onlyUnread = false
+        status = ""
+        needsConnect = false
+        contacts = Prefs.mailContacts(ctx)
+        activeEmail = a.email
+        accountsVer++
         connect()
     }
 
@@ -1020,13 +1051,41 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
                     }
                 }
             }
-            if (token != null) {
-                // Aktywne konto widać od razu; dotknięcie otwiera listę kont (przełączanie i „Dodaj konto”).
-                Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onOpenAccounts, modifier = Modifier.weight(1f)) {
-                        Text(Prefs.mailAccount(ctx) + "  ▾", fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            // Kafelek skrzynki: dotknięcie rozsuwa listę kont, wybór od razu otwiera tę skrzynkę.
+            Box(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                val tileShape = RoundedCornerShape(14.dp)
+                Row(
+                    Modifier.fillMaxWidth().clip(tileShape)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, tileShape)
+                        .clickable { accountMenu = true }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Skrzynka", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            activeEmail.ifBlank { "Wybierz konto" },
+                            fontWeight = FontWeight.Bold, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
-                    TextButton(onClick = onOpenAccounts) { Text("+ Dodaj konto", fontSize = 13.sp) }
+                    Text("▾", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }, modifier = Modifier.fillMaxWidth(0.92f)) {
+                    accounts.forEach { a ->
+                        val isActive = MailAccounts.isActive(ctx, a)
+                        DropdownMenuItem(
+                            text = {
+                                Column {
+                                    Text((if (isActive) "✓ " else "") + a.email, fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal)
+                                    Text(MailAccounts.describe(a), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            },
+                            onClick = { accountMenu = false; switchTo(a) }
+                        )
+                    }
+                    DropdownMenuItem(text = { Text("+ Dodaj konto") }, onClick = { accountMenu = false; onOpenAccounts() })
                 }
             }
             if (token != null) {
