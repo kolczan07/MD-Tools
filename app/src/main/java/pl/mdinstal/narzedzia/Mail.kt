@@ -715,6 +715,14 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
             try {
                 val label = folder
                 val q = searchQuery()
+                if (!more && rows.isEmpty() && query.isBlank() && !(onlyUnread && label == "INBOX")) {
+                    // Pokazujemy od razu ostatnio pobraną listę tego folderu, a świeżą dociągamy w tle.
+                    val cache = if (MailApi.isImap(ctx)) ImapApi.cachedList(ctx, label) else null
+                    if (cache != null) {
+                        rows.addAll(cache.first)
+                        nextToken = cache.second
+                    }
+                }
                 val (fetched, next) = api { t -> MailApi.list(ctx, t, label, if (more) nextToken else null, query.trim(), onlyUnread && label == "INBOX") }
                 if (label == folder && q == searchQuery()) {
                     if (!more) rows.clear()
@@ -727,7 +735,7 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
                         scope.launch(Dispatchers.IO) { try { MailApi.prefetch(ctx, top) } catch (e: Exception) { } }
                     }
                 }
-                if (label == "INBOX") updateUnread()
+                if (label == "INBOX") scope.launch { updateUnread() }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

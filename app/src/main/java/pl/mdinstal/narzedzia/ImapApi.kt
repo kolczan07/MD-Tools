@@ -321,7 +321,18 @@ object ImapApi {
      * Jedna strona listy wątków. [page] = null dla pierwszej strony; zwrócony token to początek następnej (albo null).
      * Z [text] lub [unreadOnly] folder jest przeszukiwany po stronie serwera.
      */
-    fun list(ctx: Context, role: String, page: String?, text: String, unreadOnly: Boolean): Pair<List<MailRow>, String?> =
+    private val listCache = java.util.concurrent.ConcurrentHashMap<String, Pair<List<MailRow>, String?>>()
+
+    /** Ostatnio pobrana pierwsza strona listy folderu (do natychmiastowego pokazania przed odświeżeniem). */
+    fun cachedList(ctx: Context, role: String): Pair<List<MailRow>, String?>? = listCache[Prefs.mailAccount(ctx) + "|" + role]
+
+    fun list(ctx: Context, role: String, page: String?, text: String, unreadOnly: Boolean): Pair<List<MailRow>, String?> {
+        val res = listFresh(ctx, role, page, text, unreadOnly)
+        if (page == null && text.isBlank() && !unreadOnly) listCache[Prefs.mailAccount(ctx) + "|" + role] = res
+        return res
+    }
+
+    private fun listFresh(ctx: Context, role: String, page: String?, text: String, unreadOnly: Boolean): Pair<List<MailRow>, String?> =
         withStore(ctx) { store ->
             val f = openFolder(ctx, store, role, false)
             try {
@@ -610,9 +621,8 @@ object ImapApi {
 
     /** Liczba nieprzeczytanych wiadomości w Odebranych. */
     fun inboxUnread(ctx: Context): Int = withStore(ctx) { store ->
-        val f = store.getFolder("INBOX")
-        f.open(Folder.READ_ONLY)
-        try { f.unreadMessageCount } finally { try { f.close(false) } catch (e: Exception) { } }
+        // Na zamkniętym folderze liczba nieprzeczytanych idzie przez STATUS — bez wybierania folderu (SELECT).
+        store.getFolder("INBOX").unreadMessageCount
     }
 
     /** Punkt odniesienia „UIDVALIDITY:ostatni UID” — po nim rozpoznajemy nowe wiadomości. */
