@@ -73,16 +73,6 @@ private val docs = listOf(
 fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
     val cs = MaterialTheme.colorScheme
     val homeCtx = LocalContext.current
-    var user by remember { mutableStateOf(Prefs.appUser(homeCtx)) }
-    if (user.isBlank()) {
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text("Kto korzysta z aplikacji?") },
-            text = { Text("Imię pojawi się na ekranie głównym i w podpisie maili. Możesz je zmienić w Ustawieniach.") },
-            confirmButton = { TextButton(onClick = { Prefs.setAppUser(homeCtx, "Marcin"); user = "Marcin" }) { Text("Marcin") } },
-            dismissButton = { TextButton(onClick = { Prefs.setAppUser(homeCtx, "Daniel"); user = "Daniel" }) { Text("Daniel") } }
-        )
-    }
     // Najpierw ostatnia znana liczba, potem ciche odświeżenie z Gmaila (bez okien zgody).
     var mailUnread by remember { mutableIntStateOf(Prefs.mailUnread(homeCtx)) }
     LaunchedEffect(Unit) {
@@ -118,7 +108,7 @@ fun HomeScreen(onOpen: (Screen) -> Unit, onOpenPumps: () -> Unit = {}) {
             Column(Modifier.weight(1f)) {
                 Text("MD-Tools", fontSize = 32.sp, fontWeight = FontWeight.ExtraBold, color = cs.onBackground)
                 Text(
-                    if (user.isNotBlank()) "Cześć, $user" else "Panel techniczny",
+                    "Panel techniczny",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = cs.onBackground

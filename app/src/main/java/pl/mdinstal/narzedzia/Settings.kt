@@ -62,62 +62,10 @@ fun SettingsScreen(
             Modifier.fillMaxSize().padding(pad).consumeWindowInsets(pad)
                 .verticalScroll(rememberScrollState()).padding(16.dp)
         ) {
-            SectionTitle("Motyw aplikacji")
-            val themes = listOf(
-                Triple("light", "☀️ Jasny", "Zawsze jasny"),
-                Triple("dark", "🌙 Ciemny", "Zawsze ciemny"),
-                Triple("system", "⚙️ Systemowy", "Zgodnie z ustawieniami telefonu")
-            )
-            DropdownCard(
-                value = themes.firstOrNull { it.first == themeMode }?.second ?: themes.last().second,
-                desc = themes.firstOrNull { it.first == themeMode }?.third.orEmpty(),
-                options = themes.map { it.first to it.second },
-                onSelect = onTheme
-            )
-
-            SectionTitle("Użytkownik")
-            val userCtx = LocalContext.current
-            var appUser by remember { mutableStateOf(Prefs.appUser(userCtx)) }
-            DropdownCard(
-                value = appUser.ifBlank { "Nie wybrano" },
-                desc = "Powitanie na ekranie głównym i imię w podpisie maili",
-                options = listOf("Marcin" to "Marcin", "Daniel" to "Daniel"),
-                onSelect = { Prefs.setAppUser(userCtx, it); appUser = it }
-            )
-
-            SectionTitle("Konta i integracje")
+            NavCard("Motyw", "Wygląd aplikacji: " + themeLabel(themeMode)) { onOpen(Screen.Theme) }
             NavCard("Konta i integracje", "Portal IGLU, Asaj.pl, kamery, poczta, Google Drive") { onOpen(Screen.UserSettings) }
-
-            SectionTitle("Skróty")
             NavCard("Skróty do aplikacji", "Wybrane aplikacje pojawią się na ekranie głównym w sekcji Aplikacje") { onOpen(Screen.Shortcuts) }
-
-            SectionTitle("Aktualizacje")
-            UpdateCard()
-
-            SectionTitle("O aplikacji")
-            NavCard("O aplikacji", "Wersja, informacje, autor") { onOpen(Screen.About) }
-        }
-    }
-}
-
-/** Karta z rozsuwaną listą: pokazuje aktualny wybór, po dotknięciu rozwija opcje. */
-@Composable
-private fun DropdownCard(value: String, desc: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
-        AppCard(Modifier.fillMaxWidth(), onClick = { open = true }) {
-            Row(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(value, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
-                    if (desc.isNotBlank()) SubText(desc)
-                }
-                Icon(Icons.Filled.ArrowDropDown, contentDescription = "Rozwiń listę", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            options.forEach { (key, label) ->
-                DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(key); open = false })
-            }
+            NavCard("O aplikacji", "Wersja, aktualizacje, informacje") { onOpen(Screen.About) }
         }
     }
 }
@@ -136,7 +84,7 @@ private fun NavCard(title: String, desc: String, onClick: () -> Unit) {
 fun AboutScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     AppScaffold("O aplikacji", onBack) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
+        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("MD-Tools", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
             Text(
                 "Wersja: ${appVersion(ctx)}",
@@ -149,7 +97,9 @@ fun AboutScreen(onBack: () -> Unit) {
                 modifier = Modifier.padding(top = 8.dp),
                 color = MaterialTheme.colorScheme.onBackground
             )
-            DebugDownloadCard(Modifier.padding(top = 20.dp))
+            SectionTitle("Aktualizacje", Modifier.padding(top = 12.dp))
+            UpdateCard()
+            DebugDownloadCard(Modifier.padding(top = 12.dp))
             SubText("© MD-INSTAL", Modifier.padding(top = 24.dp))
         }
     }

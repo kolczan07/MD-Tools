@@ -244,27 +244,14 @@ object Prefs {
     }
 
     // ── Poczta: podpis, powiadomienia, książka adresowa ──
-    /** Kto korzysta z aplikacji (Marcin / Daniel) — pytamy przy pierwszym uruchomieniu. Pusty = jeszcze nie wybrano. */
-    fun appUser(c: Context): String = sp(c).getString("app_user", "") ?: ""
-    fun setAppUser(c: Context, v: String) {
-        val prev = appUser(c)
-        sp(c).edit().putString("app_user", v).apply()
-        // Podpis zapisany z poprzednim imieniem przepisujemy na nowe, reszta podpisu zostaje bez zmian.
-        val stored = sp(c).getString("mail_signature", "") ?: ""
-        if (prev.isNotBlank() && prev != v && stored.startsWith("Pozdrawiam, $prev")) {
-            setMailSignature(c, stored.replaceFirst("Pozdrawiam, $prev", "Pozdrawiam, $v"))
-        }
-    }
-
-    /** Wspólny podpis firmowy; różni się tylko imieniem na początku. */
-    fun defaultSignature(user: String): String =
-        if (user.isBlank()) "" else
-            "Pozdrawiam, $user\n\nMD-INSTAL Marcin Kołak Daniel Ostolski s.c.\n08-112 Myrcha 13\nNIP: 8212683539\n" +
-                "instalacje.md-instal.com\nMarcin: 517273620\nDaniel: 517944083"
+    /** Wspólny podpis firmowy (domyślny, dopóki użytkownik nie zapisze własnego w ustawieniach poczty). */
+    fun defaultSignature(): String =
+        "Pozdrawiam,\n\nMD-INSTAL Marcin Kołak Daniel Ostolski s.c.\n08-112 Myrcha 13\nNIP: 8212683539\n" +
+            "instalacje.md-instal.com\nMarcin: 517273620\nDaniel: 517944083"
 
     /** Podpis zapisany w ustawieniach poczty, a jeśli go nie ma — domyślny z imieniem użytkownika. */
     fun mailSignature(c: Context): String =
-        (sp(c).getString("mail_signature", "") ?: "").ifBlank { defaultSignature(appUser(c)) }
+        (sp(c).getString("mail_signature", "") ?: "").ifBlank { defaultSignature() }
     fun setMailSignature(c: Context, v: String) { sp(c).edit().putString("mail_signature", v).apply() }
 
     fun mailNotify(c: Context): Boolean = sp(c).getBoolean("mail_notify", false)

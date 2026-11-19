@@ -11,7 +11,7 @@ import java.util.Locale
 enum class Screen {
     Home, Radio, Network, Speedtest, Wifi, Lan, Sadp, Weather, Iglutech,
     Shortcuts, Settings, IgluSettings, About, Schematic, Protocol, Asaj, AsajSettings, CamSettings,
-    UserSettings, GoogleSettings, Mail, MailSettings, MailAccounts, MailImap
+    UserSettings, GoogleSettings, Mail, MailSettings, MailAccounts, MailImap, Theme
 }
 
 data class Station(val name: String, val url: String, val logo: String = "")

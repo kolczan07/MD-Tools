@@ -66,7 +66,7 @@ class MainActivity : FragmentActivity() {
         if (Prefs.mailNotify(this)) MailNotify.schedule(this)
         setContent {
             val dark = when (themeMode) {
-                "dark" -> true
+                "dark", "oled" -> true
                 "light" -> false
                 else -> isSystemInDarkTheme()
             }
@@ -76,7 +76,7 @@ class MainActivity : FragmentActivity() {
                     navigationBarStyle = SystemBarStyle.auto(AColor.TRANSPARENT, AColor.TRANSPARENT) { dark }
                 )
             }
-            AppTheme(dark) {
+            AppTheme(dark, oled = themeMode == "oled") {
                 App(openMail = openMail, onMailOpened = { openMail = false }, openTarget = openTarget, onTargetOpened = { openTarget = null }, themeMode = themeMode, onTheme = { m ->
                     themeMode = m
                     Prefs.setTheme(this@MainActivity, m)
@@ -210,6 +210,7 @@ fun App(openMail: Boolean, onMailOpened: () -> Unit, openTarget: String?, onTarg
                 Screen.GoogleSettings -> GoogleSettingsScreen(onBack = { back() })
                 Screen.AsajSettings -> AsajSettingsScreen(onBack = { back() })
                 Screen.CamSettings -> CamSettingsScreen(onBack = { back() })
+                Screen.Theme -> ThemeScreen(themeMode, onTheme, onBack = { back() })
                 Screen.About -> AboutScreen(onBack = { back() })
                 Screen.Schematic -> SchematicScreen(onBack = { back() })
                 Screen.Protocol -> ProtocolScreen(onBack = { back() })
