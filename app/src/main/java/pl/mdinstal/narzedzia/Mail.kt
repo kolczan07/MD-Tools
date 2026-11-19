@@ -721,6 +721,11 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
                     // Wątek może zahaczać o dwie strony listy (IMAP) — nie dublujemy wierszy.
                     rows.addAll(fetched.filter { n -> rows.none { it.id == n.id } })
                     nextToken = next
+                    if (!more && MailApi.isImap(ctx)) {
+                        // Treść najnowszych wątków pobieramy w tle, żeby otwierały się od razu.
+                        val top = rows.take(8).map { it.id }
+                        scope.launch(Dispatchers.IO) { try { MailApi.prefetch(ctx, top) } catch (e: Exception) { } }
+                    }
                 }
                 if (label == "INBOX") updateUnread()
             } catch (e: CancellationException) {

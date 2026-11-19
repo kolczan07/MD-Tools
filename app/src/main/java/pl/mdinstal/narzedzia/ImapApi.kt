@@ -101,6 +101,7 @@ object ImapApi {
         p["mail.$proto.partialfetch"] = "false"
         // Połączenie w puli trzymamy dłużej niż domyślne 45 s, żeby kolejne otwarcia nie logowały się od nowa.
         p["mail.$proto.connectionpooltimeout"] = "300000"
+        p["mail.$proto.connectionpoolsize"] = "3"
         p["mail.$proto.ssl.checkserveridentity"] = "true"
         if (sec == "starttls") {
             p["mail.$proto.starttls.enable"] = "true"
@@ -509,7 +510,36 @@ object ImapApi {
         )
     }
 
-    fun getThread(ctx: Context, id: String): MailThread = withStore(ctx) { store ->
+    // Wątki pobrane z wyprzedzeniem (patrz [prefetch]) albo już otwarte: ponowne otwarcie jest natychmiastowe.
+    private class CachedThread(val thread: MailThread, val at: Long)
+    private val threadCache = object : LinkedHashMap<String, CachedThread>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedThread>?) = size > 30
+    }
+    private const val CACHE_TTL_MS = 5 * 60 * 1000L
+
+    private fun cachedThread(id: String): MailThread? = synchronized(threadCache) {
+        val c = threadCache[id] ?: return null
+        if (System.currentTimeMillis() - c.at > CACHE_TTL_MS) { threadCache.remove(id); null } else c.thread
+    }
+
+    private fun forget(id: String) { synchronized(threadCache) { threadCache.remove(id) } }
+
+    /** Po załadowaniu listy pobiera w tle treść kilku najnowszych wątków, żeby ich otwarcie było od razu. */
+    fun prefetch(ctx: Context, ids: List<String>) {
+        for (id in ids) {
+            if (cachedThread(id) != null) continue
+            try { getThread(ctx, id) } catch (e: Exception) { }
+        }
+    }
+
+    fun getThread(ctx: Context, id: String): MailThread {
+        cachedThread(id)?.let { return it }
+        val t = loadThread(ctx, id)
+        synchronized(threadCache) { threadCache[id] = CachedThread(t, System.currentTimeMillis()) }
+        return t
+    }
+
+    private fun loadThread(ctx: Context, id: String): MailThread = withStore(ctx) { store ->
         val role = id.substringBefore('|')
         val key = id.substringAfter('|')
         val collected = ArrayList<Pair<Long, MailMessage>>()
@@ -680,10 +710,12 @@ object ImapApi {
     }
 
     fun trash(ctx: Context, id: String) {
+        forget(id)
         onThread(ctx, id, true) { f, msgs, store -> moveTo(ctx, store, f, msgs, "TRASH") }
     }
 
     fun untrash(ctx: Context, id: String) {
+        forget(id)
         onThread(ctx, id, true) { f, msgs, store -> moveTo(ctx, store, f, msgs, "INBOX") }
     }
 

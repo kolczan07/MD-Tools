@@ -23,6 +23,11 @@ object MailApi {
     fun getThread(ctx: Context, token: String, id: String): MailThread =
         if (isImap(ctx)) ImapApi.getThread(ctx, id) else GmailApi.getThread(token, id)
 
+    /** Pobiera w tle treść wskazanych wątków (tylko IMAP; Gmail API jest wystarczająco szybkie). */
+    fun prefetch(ctx: Context, ids: List<String>) {
+        if (isImap(ctx)) ImapApi.prefetch(ctx, ids)
+    }
+
     fun attachment(ctx: Context, token: String, messageId: String, attachmentId: String): ByteArray =
         if (isImap(ctx)) ImapApi.attachment(ctx, messageId, attachmentId) else GmailApi.attachment(token, messageId, attachmentId)
 
