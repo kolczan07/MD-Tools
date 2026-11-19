@@ -259,6 +259,15 @@ object ImapApi {
         f.fetch(msgs, fp)
     }
 
+    /** Lekkie pobranie samych kopert (temat, UID) — do szukania wątku, bez struktury MIME. */
+    private fun fetchLight(f: Folder, msgs: Array<Message>) {
+        if (msgs.isEmpty()) return
+        val fp = FetchProfile()
+        fp.add(FetchProfile.Item.ENVELOPE)
+        fp.add(UIDFolder.FetchProfileItem.UID)
+        f.fetch(msgs, fp)
+    }
+
     private fun hasAttachment(m: Message): Boolean = try { m.isMimeType("multipart/mixed") } catch (e: Exception) { false }
 
     private fun threadKey(f: Folder, m: Message): String {
@@ -332,25 +341,33 @@ object ImapApi {
         }
 
     /** Wiadomości wątku w jednym folderze (pasujące do klucza). Folder musi być otwarty. */
-    private fun findInFolder(f: IMAPFolder, key: String): List<Message> {
+    private fun findInFolder(f: IMAPFolder, key: String, primary: Boolean = true): List<Message> {
         if (key.startsWith("#")) {
             val uid = key.substring(1).toLongOrNull() ?: return emptyList()
             return listOfNotNull(f.getMessageByUID(uid))
         }
         var found: List<Message> = emptyList()
-        try {
-            val candidates = f.search(SubjectTerm(key))
-            fetchEnvelopes(f, candidates)
-            found = candidates.filter { normSubject(subjectOf(it)) == key }
-        } catch (e: Exception) {
-            // Serwer nie obsługuje wyszukiwania ze znakami spoza ASCII — przeglądamy ostatnie wiadomości sami.
+        var searched = false
+        // Wyszukiwanie po temacie robi serwer — ale tylko dla ASCII. Przy polskich znakach JavaMail po cichu
+        // przegląda całą skrzynkę po stronie telefonu (to były dziesiątki sekund), więc wtedy od razu skanujemy okno.
+        if (key.all { it.code < 128 }) {
+            try {
+                val candidates = f.search(SubjectTerm(key))
+                searched = true
+                fetchLight(f, candidates)
+                found = candidates.filter { normSubject(subjectOf(it)) == key }
+            } catch (e: Exception) {
+                searched = false
+            }
         }
-        if (found.isEmpty()) {
-            // Serwer nic nie znalazł (inne kodowanie tematu, znaki spoza ASCII) — przeglądamy ostatnie wiadomości sami.
+        // Skan ostatnich wiadomości (tylko koperty): gdy nie szukał serwer, albo w folderze głównym nic nie znalazł.
+        // W folderze pobocznym (np. Wysłane) pusty wynik wyszukiwania jest normalny i nie skanujemy.
+        if (found.isEmpty() && (!searched || primary)) {
             val n = f.messageCount
             if (n > 0) {
-                val window = f.getMessages(maxOf(1, n - 800 + 1), n)
-                fetchEnvelopes(f, window)
+                val size = if (primary) 400 else 150
+                val window = f.getMessages(maxOf(1, n - size + 1), n)
+                fetchLight(f, window)
                 found = window.filter { normSubject(subjectOf(it)) == key }
             }
         }
@@ -460,7 +477,7 @@ object ImapApi {
         for (r in rolesFor(role)) {
             val f = try { openFolder(ctx, store, r, false) } catch (e: Exception) { continue }
             try {
-                val msgs = findInFolder(f, key)
+                val msgs = findInFolder(f, key, primary = r == role)
                 if (msgs.isEmpty()) continue
                 val arr = msgs.toTypedArray()
                 fetchEnvelopes(f, arr)
