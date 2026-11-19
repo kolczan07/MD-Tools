@@ -67,11 +67,60 @@ object MailAutoConfig {
         }
     }
 
+    private fun httpGet(url: String): String? = try {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.connectTimeout = 3500
+        c.readTimeout = 3500
+        if (c.responseCode != 200) null else c.inputStream.bufferedReader().use { it.readText() }
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun serverBlock(xml: String, tag: String, type: String): Triple<String, Int, Boolean>? {
+        val m = Regex("<$tag\\s+type=\"$type\"[^>]*>(.*?)</$tag>", RegexOption.DOT_MATCHES_ALL).find(xml) ?: return null
+        val b = m.groupValues[1]
+        val host = Regex("<hostname>\\s*([^<\\s]+)\\s*</hostname>").find(b)?.groupValues?.get(1) ?: return null
+        val port = Regex("<port>\\s*(\\d+)\\s*</port>").find(b)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        val sock = Regex("<socketType>\\s*([^<\\s]+)\\s*</socketType>").find(b)?.groupValues?.get(1)?.uppercase()
+        return Triple(host, port, sock == "SSL")
+    }
+
+    /**
+     * Standardowa autokonfiguracja Mozilli (to z niej korzysta Thunderbird): plik publikowany przez dostawcę
+     * albo baza Thunderbirda. Daje m.in. indywidualny adres serwera home.pl (serwerNNNNNN.home.pl).
+     */
+    private suspend fun fromAutoconfig(domain: String, email: String, name: String, note: String): MailPreset? =
+        withContext(Dispatchers.IO) {
+            val mail = java.net.URLEncoder.encode(email, "UTF-8")
+            val urls = listOf(
+                "https://autoconfig.$domain/mail/config-v1.1.xml?emailaddress=$mail",
+                "https://$domain/.well-known/autoconfig/mail/config-v1.1.xml?emailaddress=$mail",
+                "https://autoconfig.thunderbird.net/v1.1/$domain"
+            )
+            for (u in urls) {
+                val xml = httpGet(u) ?: continue
+                val imap = serverBlock(xml, "incomingServer", "imap") ?: continue
+                val smtp = serverBlock(xml, "outgoingServer", "smtp") ?: continue
+                return@withContext MailPreset(name, imap.first, imap.second, imap.third, smtp.first, smtp.second, smtp.third, note = note)
+            }
+            null
+        }
+
     /** Ustawienia dla adresu [email] albo null, gdy dostawcy nie rozpoznajemy. */
     suspend fun detect(email: String): MailPreset? {
         val domain = email.substringAfter('@', "").trim().lowercase()
         if (!domain.contains('.')) return null
         DOMAINS[domain]?.let { return it }
-        return fromMx(mxHosts(domain))
+        val mx = fromMx(mxHosts(domain))
+        if (mx === HOME) {
+            // home.pl: każde konto ma własny serwer (serwerNNNNNN.home.pl) — bierzemy go z autokonfiguracji.
+            fromAutoconfig(domain, email, "home.pl", HOME.note)?.let { return it }
+            return HOME.copy(
+                imapHost = domain, smtpHost = domain,
+                note = "Nie udało się pobrać adresu serwera automatycznie. Wpisz adres serwera poczty z Panelu klienta home.pl (Usługi WWW → nazwa serwera → Konta e-mail), zwykle serwerNNNNNN.home.pl. Login to pełny adres e-mail."
+            )
+        }
+        if (mx != null) return mx
+        return fromAutoconfig(domain, email, domain, "Ustawienia pobrane automatycznie. Login to zwykle pełny adres e-mail.")
     }
 }
