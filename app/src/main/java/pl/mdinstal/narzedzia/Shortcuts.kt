@@ -76,19 +76,24 @@ fun ShortcutsScreen(onBack: () -> Unit) {
     var picking by remember { mutableStateOf(false) }
     var toDelete by remember { mutableStateOf<Shortcut?>(null) }
     var info by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf("") }
+    val shown = if (filter.isBlank()) list.toList() else list.filter { it.label.contains(filter.trim(), ignoreCase = true) }
 
     AppScaffold("Moje skróty", onBack) { pad ->
         Column(Modifier.fillMaxSize().padding(pad).padding(16.dp)) {
             if (list.isEmpty()) {
                 SubText("Brak skrótów. Kliknij „Dodaj skrót”, żeby dodać pierwszą aplikację.")
             } else {
+                // Przy dłuższej liście skrótów przydaje się wyszukiwanie.
+                if (list.size > 6) SearchField(filter, { filter = it }, "Szukaj skrótu", Modifier.fillMaxWidth().padding(bottom = 12.dp))
+                if (shown.isEmpty()) SubText("Brak skrótów pasujących do wyszukiwania.")
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(list, key = { it.pkg }) { s ->
+                    items(shown, key = { it.pkg }) { s ->
                         AppCard(
                             onClick = {
                                 val li = ctx.packageManager.getLaunchIntentForPackage(s.pkg)
@@ -135,6 +140,7 @@ fun ShortcutsScreen(onBack: () -> Unit) {
 
     if (picking) {
         var apps by remember { mutableStateOf<List<AppInfo>?>(null) }
+        var q by remember { mutableStateOf("") }
         LaunchedEffect(Unit) { apps = withContext(Dispatchers.Default) { launchableApps(ctx) } }
         AlertDialog(
             onDismissRequest = { picking = false },
@@ -142,8 +148,12 @@ fun ShortcutsScreen(onBack: () -> Unit) {
             text = {
                 val a = apps
                 if (a == null) Text("Ładowanie…")
-                else LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(a, key = { it.pkg }) { app ->
+                else Column {
+                    SearchField(q, { q = it }, "Szukaj aplikacji", Modifier.fillMaxWidth().padding(bottom = 8.dp))
+                    val found = if (q.isBlank()) a else a.filter { it.label.contains(q.trim(), ignoreCase = true) }
+                    if (found.isEmpty()) SubText("Nie znaleziono aplikacji.")
+                    LazyColumn(Modifier.heightIn(max = 380.dp)) {
+                    items(found, key = { it.pkg }) { app ->
                         Row(
                             Modifier.fillMaxWidth().clickable {
                                 if (list.none { it.pkg == app.pkg }) {
@@ -157,6 +167,7 @@ fun ShortcutsScreen(onBack: () -> Unit) {
                             AppIcon(app.pkg, 36)
                             Text(app.label, modifier = Modifier.padding(start = 12.dp))
                         }
+                    }
                     }
                 }
             },
