@@ -232,7 +232,8 @@ object ImapApi {
         } catch (e: Exception) {
             first = e
         }
-        for ((port, sec) in listOf(587 to "starttls", 465 to "ssl")) {
+        val flipped = cfg.smtpPort to (if (cfg.smtpSec == "ssl") "starttls" else "ssl")
+        for ((port, sec) in listOf(flipped, 587 to "starttls", 465 to "ssl", 25 to "starttls").distinct()) {
             if (port == cfg.smtpPort && sec == cfg.smtpSec) continue
             try {
                 guard { trySmtp(cfg, port, sec) }
