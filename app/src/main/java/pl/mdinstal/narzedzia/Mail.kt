@@ -871,7 +871,9 @@ fun MailScreen(onBack: () -> Unit, onOpenAccounts: () -> Unit = {}) {
                 val idx = rows.indexOfFirst { it.id == id }
                 if (idx >= 0 && rows[idx].unread) {
                     rows[idx] = rows[idx].copy(unread = false)
-                    try { api { tk -> MailApi.markRead(ctx, tk, id) } } catch (e: Exception) { }
+                    try { api { tk -> MailApi.markRead(ctx, tk, id) } }
+                    catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { status = "Nie udało się oznaczyć jako przeczytane na serwerze: " + (e.message ?: e.javaClass.simpleName) }
                     updateUnread()
                 }
             } catch (e: CancellationException) {

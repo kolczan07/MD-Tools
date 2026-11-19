@@ -726,10 +726,49 @@ object ImapApi {
         }
 
     fun markRead(ctx: Context, id: String) {
-        onThread(ctx, id, true) { f, msgs, _ ->
-            if (msgs.isNotEmpty()) f.setFlags(msgs.toTypedArray(), Flags(Flags.Flag.SEEN), true)
-            Unit
+        val role = id.substringBefore('|')
+        val key = id.substringAfter('|')
+        var marked = 0
+        withStore(ctx) { store ->
+            val f = openFolder(ctx, store, role, true)
+            try {
+                // Najpierw UID-y znane z listy (pewne i szybkie), dopiero potem wyszukiwanie po temacie.
+                var msgs: List<Message> = try {
+                    knownUids[id]?.let { u -> f.getMessagesByUID(u.toLongArray()).filterNotNull() }.orEmpty()
+                } catch (e: Exception) { emptyList() }
+                if (msgs.isEmpty()) msgs = findInFolder(f, key)
+                if (msgs.isNotEmpty()) {
+                    f.setFlags(msgs.toTypedArray(), Flags(Flags.Flag.SEEN), true)
+                    marked = msgs.size
+                }
+            } finally {
+                try { f.close(false) } catch (e: Exception) { }
+            }
         }
+        if (marked == 0) throw java.io.IOException("Nie znaleziono wiadomości na serwerze, by oznaczyć ją jako przeczytaną")
+        markReadInCaches(ctx, id)
+    }
+
+    /** Po oznaczeniu na serwerze poprawia kopie lokalne, żeby lista i otwarty wątek nie wracały do „nieprzeczytane”. */
+    private fun markReadInCaches(ctx: Context, id: String) {
+        val role = id.substringBefore('|')
+        try {
+            val lk = Prefs.mailAccount(ctx) + "|" + role
+            listCache[lk]?.let { (rows, next) ->
+                val upd = rows.map { if (it.id == id) it.copy(unread = false) else it }
+                listCache[lk] = upd to next
+                MailDiskCache.saveList(ctx, role, upd, next)
+            }
+        } catch (e: Exception) { }
+        try {
+            val cached = synchronized(threadCache) { threadCache[id]?.thread }
+            val t = cached ?: MailDiskCache.loadThread(ctx, id)?.first
+            if (t != null) {
+                val upd = t.copy(messages = t.messages.map { it.copy(unread = false) })
+                synchronized(threadCache) { threadCache[id] = CachedThread(upd, System.currentTimeMillis()) }
+                MailDiskCache.saveThread(ctx, upd, rowTimes[id] ?: upd.messages.maxOfOrNull { it.time } ?: 0L)
+            }
+        } catch (e: Exception) { }
     }
 
     private fun moveTo(ctx: Context, store: Store, f: IMAPFolder, msgs: List<Message>, targetRole: String) {
