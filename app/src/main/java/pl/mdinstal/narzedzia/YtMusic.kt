@@ -271,7 +271,7 @@ private fun Track.toMediaItem(): MediaItem =
                 .setTitle(title)
                 .setArtist(artist)
                 .setAlbumTitle("YouTube Music")
-                .setDurationMs(durationSec * 1000)
+                .setExtras(android.os.Bundle().apply { putLong("dur", durationSec) })
                 .also { if (thumb.startsWith("http")) it.setArtworkUri(Uri.parse(thumb)) }
                 .build()
         )
@@ -285,7 +285,7 @@ fun MediaItem.toYtTrack(): Track? {
         mediaMetadata.title?.toString().orEmpty(),
         mediaMetadata.artist?.toString().orEmpty(),
         mediaMetadata.artworkUri?.toString().orEmpty(),
-        (mediaMetadata.durationMs ?: 0L) / 1000
+        mediaMetadata.extras?.getLong("dur") ?: 0L
     )
 }
 
