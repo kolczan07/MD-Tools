@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -132,6 +133,37 @@ object MusicStore {
     } catch (e: Exception) {
         emptyList()
     }
+
+    const val HISTORY_ID = "__history__"
+    private const val HISTORY_MAX = 100
+
+    /** Automatyczna playlista „Historia odtwarzania”: najnowsze na górze. */
+    fun history(c: Context): List<Track> = try {
+        val t = JSONArray(sp(c).getString("history", "[]"))
+        (0 until t.length()).map { j ->
+            val x = t.getJSONObject(j)
+            Track(x.optString("id"), x.optString("title"), x.optString("artist"), x.optString("thumb"), x.optLong("dur"))
+        }.filter { it.id.isNotEmpty() }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun saveHistory(c: Context, l: List<Track>) {
+        val t = JSONArray()
+        l.forEach { t.put(JSONObject().put("id", it.id).put("title", it.title).put("artist", it.artist).put("thumb", it.thumb).put("dur", it.durationSec)) }
+        sp(c).edit().putString("history", t.toString()).apply()
+    }
+
+    @Synchronized
+    fun addHistory(c: Context, t: Track) {
+        saveHistory(c, (listOf(t) + history(c).filter { it.id != t.id }).take(HISTORY_MAX))
+    }
+
+    @Synchronized
+    fun removeFromHistory(c: Context, id: String) { saveHistory(c, history(c).filter { it.id != id }) }
+
+    @Synchronized
+    fun clearHistory(c: Context) { saveHistory(c, emptyList()) }
 
     fun save(c: Context, l: List<Playlist>) {
         val a = JSONArray()
@@ -239,10 +271,23 @@ private fun Track.toMediaItem(): MediaItem =
                 .setTitle(title)
                 .setArtist(artist)
                 .setAlbumTitle("YouTube Music")
+                .setDurationMs(durationSec * 1000)
                 .also { if (thumb.startsWith("http")) it.setArtworkUri(Uri.parse(thumb)) }
                 .build()
         )
         .build()
+
+/** Odtwarza Track z MediaItem utworu z YT Music (null dla radia i innych źródeł). */
+fun MediaItem.toYtTrack(): Track? {
+    if (localConfiguration?.uri?.scheme != "ytm") return null
+    return Track(
+        mediaId,
+        mediaMetadata.title?.toString().orEmpty(),
+        mediaMetadata.artist?.toString().orEmpty(),
+        mediaMetadata.artworkUri?.toString().orEmpty(),
+        (mediaMetadata.durationMs ?: 0L) / 1000
+    )
+}
 
 // ─────────────────────────────────────────────────────────────────────
 //  EKRAN GŁÓWNY KAFELKA MUZYKA: Radio + YT Music
@@ -291,7 +336,8 @@ fun MusicHubScreen(onBack: () -> Unit, onOpen: (Screen) -> Unit) {
 //  EKRAN YT MUSIC
 // ─────────────────────────────────────────────────────────────────────
 
-private enum class YtTab { SEARCH, PLAYLISTS }
+// Kolejność = kolejność zakładek na ekranie (Playlisty pierwsze, Szukaj druga) — jak w radiu
+private enum class YtTab { PLAYLISTS, SEARCH }
 
 @Composable
 fun YtMusicScreen(onBack: () -> Unit) {
@@ -299,13 +345,16 @@ fun YtMusicScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     val cs = MaterialTheme.colorScheme
 
-    var tab by remember { mutableStateOf(YtTab.SEARCH) }
+    val lists = remember { mutableStateListOf<Playlist>().apply { addAll(MusicStore.playlists(ctx)) } }
+    // Gdy są jakieś playlisty, to one są widokiem głównym; bez playlist startujemy od wyszukiwarki
+    var tab by remember { mutableStateOf(if (lists.isNotEmpty()) YtTab.PLAYLISTS else YtTab.SEARCH) }
+    var history by remember { mutableStateOf(MusicStore.history(ctx)) }
+    var clearHistoryAsk by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<Track>>(emptyList()) }
     var status by remember { mutableStateOf("Wpisz wykonawcę lub tytuł i wyszukaj.") }
     var searching by remember { mutableStateOf(false) }
 
-    val lists = remember { mutableStateListOf<Playlist>().apply { addAll(MusicStore.playlists(ctx)) } }
     var openList by remember { mutableStateOf<String?>(null) }
 
     // dialogi
@@ -366,6 +415,7 @@ fun YtMusicScreen(onBack: () -> Unit) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) { playing = isPlaying }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                history = MusicStore.history(ctx)
                 nowId = mediaItem?.mediaId
                 nowTitle = mediaItem?.mediaMetadata?.title?.toString().orEmpty()
                 nowArtist = mediaItem?.mediaMetadata?.artist?.toString().orEmpty()
@@ -433,7 +483,10 @@ fun YtMusicScreen(onBack: () -> Unit) {
         error = ""
     }
 
-    val currentList = lists.firstOrNull { it.id == openList }
+    val currentList: Playlist? =
+        if (openList == MusicStore.HISTORY_ID) Playlist(MusicStore.HISTORY_ID, "Historia odtwarzania", history)
+        else lists.firstOrNull { it.id == openList }
+    val isHistory = currentList?.id == MusicStore.HISTORY_ID
 
     // „wstecz” z widoku playlisty wraca do listy playlist, nie wychodzi z ekranu
     androidx.activity.compose.BackHandler(enabled = currentList != null) { openList = null }
@@ -443,8 +496,8 @@ fun YtMusicScreen(onBack: () -> Unit) {
         if (currentList != null) ({ openList = null }) else onBack,
         actions = {
             if (currentList != null) {
-                IconButton(onClick = { deleteList = currentList }) {
-                    Icon(Icons.Filled.Delete, contentDescription = "Usuń playlistę")
+                IconButton(onClick = { if (isHistory) clearHistoryAsk = true else deleteList = currentList }) {
+                    Icon(Icons.Filled.Delete, contentDescription = if (isHistory) "Wyczyść historię" else "Usuń playlistę")
                 }
             }
         }
@@ -459,8 +512,8 @@ fun YtMusicScreen(onBack: () -> Unit) {
         ) {
             if (currentList == null) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    YtTabChip("Playlisty", Icons.Filled.QueueMusic, tab == YtTab.PLAYLISTS) { tab = YtTab.PLAYLISTS }
                     YtTabChip("Szukaj", Icons.Filled.Search, tab == YtTab.SEARCH) { tab = YtTab.SEARCH }
-                    YtTabChip("Moje playlisty", Icons.Filled.QueueMusic, tab == YtTab.PLAYLISTS) { tab = YtTab.PLAYLISTS }
                 }
             }
 
@@ -486,7 +539,7 @@ fun YtMusicScreen(onBack: () -> Unit) {
                 // ── widok jednej playlisty ──
                 currentList != null -> {
                     if (currentList.tracks.isEmpty()) {
-                        SubText("Playlista jest pusta. W zakładce Szukaj dotknij „+” przy utworze, żeby ją uzupełnić.")
+                        SubText(if (isHistory) "Historia jest pusta. Zagraj coś, a pojawi się tutaj." else "Playlista jest pusta. W zakładce Szukaj dotknij „+” przy utworze, żeby ją uzupełnić.")
                         Spacer(Modifier.weight(1f))
                     } else {
                         Row(
@@ -510,8 +563,13 @@ fun YtMusicScreen(onBack: () -> Unit) {
                                     current = nowId == t.id,
                                     onPlay = { playQueue(currentList.tracks, i) },
                                     actionIcon = Icons.Filled.Delete,
-                                    actionDesc = "Usuń z playlisty",
+                                    actionDesc = if (isHistory) "Usuń z historii" else "Usuń z playlisty",
                                     onAction = {
+                                        if (isHistory) {
+                                            MusicStore.removeFromHistory(ctx, t.id)
+                                            history = MusicStore.history(ctx)
+                                            return@TrackRow
+                                        }
                                         val li = lists.indexOfFirst { it.id == currentList.id }
                                         if (li >= 0) {
                                             lists[li] = currentList.copy(tracks = currentList.tracks.filter { it.id != t.id })
@@ -566,11 +624,27 @@ fun YtMusicScreen(onBack: () -> Unit) {
                         Spacer(Modifier.width(6.dp))
                         Text("Nowa playlista", color = cs.primary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
                     }
-                    if (lists.isEmpty()) {
-                        SubText("Nie masz jeszcze playlist. Stwórz pierwszą — jest tylko Twoja, zapisana na tym telefonie.")
-                        Spacer(Modifier.weight(1f))
-                    } else {
+                    run {
                         LazyColumn(modifier = sheet.weight(1f)) {
+                            item {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Row(
+                                        Modifier.fillMaxWidth().clickable { history = MusicStore.history(ctx); openList = MusicStore.HISTORY_ID }.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(cs.primary.copy(alpha = 0.14f)),
+                                            contentAlignment = Alignment.Center
+                                        ) { Icon(Icons.Filled.History, contentDescription = null, tint = cs.primary) }
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text("Historia odtwarzania", fontWeight = FontWeight.SemiBold, fontSize = 15.sp, color = cs.onSurface)
+                                            Text(if (history.isEmpty()) "Pusta" else "${history.size} utw.", fontSize = 12.sp, color = cs.onSurfaceVariant)
+                                        }
+                                    }
+                                    Box(Modifier.fillMaxWidth().padding(start = 64.dp).height(1.dp).background(cs.outlineVariant))
+                                }
+                            }
                             items(lists.toList()) { p ->
                                 Column(Modifier.fillMaxWidth()) {
                                     Row(
@@ -699,6 +773,23 @@ fun YtMusicScreen(onBack: () -> Unit) {
                 ) { Text("Utwórz") }
             },
             dismissButton = { TextButton(onClick = { newListOpen = false }) { Text("Anuluj") } }
+        )
+    }
+
+    // ── dialog: czyszczenie historii ──
+    if (clearHistoryAsk) {
+        AlertDialog(
+            onDismissRequest = { clearHistoryAsk = false },
+            title = { Text("Wyczyścić historię?") },
+            text = { Text("Lista ostatnio odtwarzanych utworów zostanie usunięta z tego telefonu.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    MusicStore.clearHistory(ctx)
+                    history = emptyList()
+                    clearHistoryAsk = false
+                }) { Text("Wyczyść") }
+            },
+            dismissButton = { TextButton(onClick = { clearHistoryAsk = false }) { Text("Anuluj") } }
         )
     }
 

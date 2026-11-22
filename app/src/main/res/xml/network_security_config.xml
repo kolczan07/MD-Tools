@@ -4,4 +4,12 @@
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">open.fm</domain>
     </domain-config>
+    <!-- YT Music: część adresów strumieni/przekierowań z YouTube bywa po HTTP -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">googlevideo.com</domain>
+        <domain includeSubdomains="true">youtube.com</domain>
+        <domain includeSubdomains="true">ytimg.com</domain>
+        <domain includeSubdomains="true">ggpht.com</domain>
+        <domain includeSubdomains="true">googleusercontent.com</domain>
+    </domain-config>
 </network-security-config>

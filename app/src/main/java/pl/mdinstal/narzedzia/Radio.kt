@@ -167,6 +167,12 @@ class RadioService : MediaSessionService() {
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
         session = MediaSession.Builder(this, player).build()
+        // Automatyczna playlista „Historia odtwarzania” (YT Music) — zapisujemy tu, żeby działało też w tle
+        player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                mediaItem?.toYtTrack()?.let { try { MusicStore.addHistory(applicationContext, it) } catch (e: Exception) { } }
+            }
+        })
 
         // Co 5 min (tylko gdy gra radio) odświeżamy temperaturę z pompy; metadane aktualizujemy bez przerywania dźwięku.
         scope.launch {
