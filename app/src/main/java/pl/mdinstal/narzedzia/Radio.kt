@@ -174,6 +174,25 @@ class RadioService : MediaSessionService() {
             }
         })
 
+        // Płynne przejścia między utworami z playlisty YT Music: wyciszanie końcówki i wejście początku (radio bez zmian)
+        scope.launch {
+            while (isActive) {
+                delay(100)
+                try {
+                    val isYt = player.currentMediaItem?.localConfiguration?.uri?.scheme == "ytm"
+                    if (!isYt) { if (player.volume != 1f) player.volume = 1f; continue }
+                    if (!player.isPlaying) continue
+                    val dur = player.duration
+                    if (dur == C.TIME_UNSET || dur <= 0) continue
+                    val fade = minOf(3000L, dur / 4).coerceAtLeast(1L)
+                    val pos = player.currentPosition
+                    val fin = (pos.toFloat() / fade).coerceIn(0f, 1f)
+                    val fout = if (player.hasNextMediaItem()) ((dur - pos).toFloat() / fade).coerceIn(0f, 1f) else 1f
+                    player.volume = minOf(fin, fout)
+                } catch (e: Exception) { }
+            }
+        }
+
         // Co 5 min (tylko gdy gra radio) odświeżamy temperaturę z pompy; metadane aktualizujemy bez przerywania dźwięku.
         scope.launch {
             while (isActive) {
