@@ -97,6 +97,8 @@ import org.schabi.newpipe.extractor.localization.Localization
 import org.schabi.newpipe.extractor.MediaFormat
 import org.schabi.newpipe.extractor.search.SearchInfo
 import org.schabi.newpipe.extractor.services.youtube.linkHandler.YoutubeSearchQueryHandlerFactory
+import org.schabi.newpipe.extractor.playlist.PlaylistInfo
+import org.schabi.newpipe.extractor.playlist.PlaylistInfoItem
 import org.schabi.newpipe.extractor.stream.DeliveryMethod
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import java.io.IOException
@@ -112,6 +114,8 @@ private val YT_RED = Color(0xFFFF0000)
 
 data class Track(val id: String, val title: String, val artist: String, val thumb: String, val durationSec: Long)
 data class Playlist(val id: String, val name: String, val tracks: List<Track>)
+/** Gotowa playlista z YouTube Music znaleziona w wyszukiwarce. */
+data class PlHit(val url: String, val name: String, val thumb: String, val count: Long, val by: String)
 
 /** Playlisty trzymane w pamięci telefonu — każdy użytkownik apki (każdy telefon) ma własne. */
 object MusicStore {
@@ -240,6 +244,46 @@ object YtNp {
         }
     }
 
+    private fun trackOf(it: StreamInfoItem): Track? {
+        val id = videoId(it.url) ?: return null
+        return Track(
+            id,
+            it.name.orEmpty(),
+            it.uploaderName.orEmpty().removeSuffix(" - Topic"),
+            it.thumbnails.maxByOrNull { t -> t.height }?.url.orEmpty(),
+            it.duration
+        )
+    }
+
+    /** Wyszukuje gotowe playlisty i albumy w YouTube Music. */
+    fun searchPlaylists(query: String): List<PlHit> {
+        init()
+        val yt = ServiceList.YouTube
+        val qh = yt.searchQHFactory.fromQuery(query, listOf(YoutubeSearchQueryHandlerFactory.MUSIC_PLAYLISTS), "")
+        val info = SearchInfo.getInfo(yt, qh)
+        return info.relatedItems.filterIsInstance<PlaylistInfoItem>().map {
+            PlHit(it.url, it.name.orEmpty(), it.thumbnails.maxByOrNull { t -> t.height }?.url.orEmpty(), it.streamCount, it.uploaderName.orEmpty())
+        }
+    }
+
+    /** Utwory playlisty (do 500, kolejne strony dociągane automatycznie). */
+    fun playlistTracks(url: String): List<Track> {
+        init()
+        val yt = ServiceList.YouTube
+        val info = PlaylistInfo.getInfo(yt, url)
+        val out = ArrayList<Track>()
+        info.relatedItems.forEach { trackOf(it)?.let { t -> out.add(t) } }
+        var page = info.nextPage
+        var n = 0
+        while (page != null && out.size < 500 && n < 10) {
+            val pg = PlaylistInfo.getMoreItems(yt, url, page)
+            pg.items.forEach { trackOf(it)?.let { t -> out.add(t) } }
+            page = pg.nextPage
+            n++
+        }
+        return out.distinctBy { it.id }
+    }
+
     /** Adres strumienia audio (m4a, jeśli jest); adresy wygasają po kilku godzinach, więc trzymamy je krótko. */
     fun streamUrl(id: String): String {
         urlCache[id]?.let { if (System.currentTimeMillis() - it.second < 2 * 3600_000L) return it.first }
@@ -355,6 +399,11 @@ fun YtMusicScreen(onBack: () -> Unit) {
     var results by remember { mutableStateOf<List<Track>>(emptyList()) }
     var status by remember { mutableStateOf("Wpisz wykonawcę lub tytuł i wyszukaj.") }
     var searching by remember { mutableStateOf(false) }
+    var searchMode by remember { mutableStateOf(0) } // 0 = utwory, 1 = gotowe playlisty
+    var plResults by remember { mutableStateOf<List<PlHit>>(emptyList()) }
+    var openPl by remember { mutableStateOf<PlHit?>(null) }
+    var plTracks by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var plLoading by remember { mutableStateOf(false) }
 
     var openList by remember { mutableStateOf<String?>(null) }
 
@@ -398,17 +447,46 @@ fun YtMusicScreen(onBack: () -> Unit) {
         return p
     }
 
+    fun openPlaylist(h: PlHit) {
+        openPl = h
+        plTracks = emptyList()
+        plLoading = true
+        scope.launch {
+            try {
+                plTracks = withContext(Dispatchers.IO) { YtNp.playlistTracks(h.url) }
+            } catch (e: Exception) {
+                status = "Nie udało się wczytać playlisty: " + (e.message ?: e.javaClass.simpleName)
+                openPl = null
+            } finally {
+                plLoading = false
+            }
+        }
+    }
+
     fun runSearch() {
         if (query.isBlank() || searching) return
+        val q = query.trim()
+        // wklejony link do playlisty YouTube: otwieramy ją od razu
+        val listId = Regex("[?&]list=([A-Za-z0-9_-]+)").find(q)?.groupValues?.get(1)
+        if (q.startsWith("http") && listId != null) {
+            openPlaylist(PlHit("https://www.youtube.com/playlist?list=$listId", "Playlista z linku", "", 0, ""))
+            return
+        }
         scope.launch {
             searching = true
             status = "Szukam…"
             try {
-                val r = withContext(Dispatchers.IO) { YtNp.search(query.trim()) }
-                results = r
-                status = if (r.isEmpty()) "Nic nie znaleziono." else ""
+                if (searchMode == 1) {
+                    val r = withContext(Dispatchers.IO) { YtNp.searchPlaylists(q) }
+                    plResults = r
+                    status = if (r.isEmpty()) "Nic nie znaleziono." else ""
+                } else {
+                    val r = withContext(Dispatchers.IO) { YtNp.search(q) }
+                    results = r
+                    status = if (r.isEmpty()) "Nic nie znaleziono." else ""
+                }
             } catch (e: Exception) {
-                results = emptyList()
+                if (searchMode == 1) plResults = emptyList() else results = emptyList()
                 status = "Błąd wyszukiwania: " + (e.message ?: e.javaClass.simpleName)
             } finally {
                 searching = false
@@ -510,10 +588,12 @@ fun YtMusicScreen(onBack: () -> Unit) {
     // „wstecz” z widoku playlisty wraca do listy playlist, nie wychodzi z ekranu
     androidx.activity.compose.BackHandler(enabled = currentList != null) { openList = null }
     androidx.activity.compose.BackHandler(enabled = selected.isNotEmpty()) { selected.clear() }
+    androidx.activity.compose.BackHandler(enabled = openPl != null) { openPl = null }
+    val pl = openPl
 
     AppScaffold(
-        if (currentList != null) currentList.name else "YT Music",
-        if (currentList != null) ({ openList = null }) else onBack,
+        if (pl != null) pl.name else if (currentList != null) currentList.name else "YT Music",
+        if (pl != null) ({ openPl = null }) else if (currentList != null) ({ openList = null }) else onBack,
         actions = {
             if (currentList != null) {
                 IconButton(onClick = { if (isHistory) clearHistoryAsk = true else deleteList = currentList }) {
@@ -530,7 +610,7 @@ fun YtMusicScreen(onBack: () -> Unit) {
                 .imePadding()
                 .padding(horizontal = 14.dp)
         ) {
-            if (currentList == null) {
+            if (currentList == null && pl == null) {
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     YtTabChip("Playlisty", Icons.Filled.QueueMusic, tab == YtTab.PLAYLISTS) { tab = YtTab.PLAYLISTS }
                     YtTabChip("Szukaj", Icons.Filled.Search, tab == YtTab.SEARCH) { tab = YtTab.SEARCH }
@@ -556,6 +636,61 @@ fun YtMusicScreen(onBack: () -> Unit) {
                 .border(1.dp, cs.outlineVariant, sheetShape)
 
             when {
+                // ── gotowa playlista z YT Music (z wyszukiwarki) ──
+                pl != null -> {
+                    if (plLoading) {
+                        SubText("Wczytuję playlistę…")
+                        Spacer(Modifier.weight(1f))
+                    } else if (plTracks.isEmpty()) {
+                        SubText("Playlista jest pusta albo nie udało się jej wczytać.")
+                        Spacer(Modifier.weight(1f))
+                    } else {
+                        Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(YT_RED)
+                                    .clickable { playQueue(plTracks, 0) }
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Odtwarzaj", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            }
+                            Row(
+                                Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(cs.primary.copy(alpha = 0.14f))
+                                    .clickable {
+                                        val np = createList(pl.name.ifBlank { "Playlista" })
+                                        addAllToList(np.id, plTracks)
+                                        android.widget.Toast.makeText(ctx, "Zapisano jako Twoją playlistę", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Filled.Add, contentDescription = null, tint = cs.primary, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Zapisz jako moją", color = cs.primary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            }
+                        }
+                        LazyColumn(modifier = sheet.weight(1f)) {
+                            items(plTracks.size) { i ->
+                                val t = plTracks[i]
+                                TrackRow(
+                                    t,
+                                    current = nowId == t.id,
+                                    onPlay = { playQueue(plTracks, i) },
+                                    actionIcon = Icons.Filled.Add,
+                                    actionDesc = "Dodaj do playlisty",
+                                    onAction = { addTargets = listOf(t) }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // ── widok jednej playlisty ──
                 currentList != null -> {
                     if (currentList.tracks.isEmpty()) {
@@ -611,6 +746,40 @@ fun YtMusicScreen(onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                         onSearch = { runSearch() }
                     )
+                    Row(Modifier.padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        YtModeChip("Utwory", searchMode == 0) { if (searchMode != 0) { searchMode = 0; selected.clear(); status = ""; if (query.isNotBlank() && results.isEmpty()) runSearch() } }
+                        YtModeChip("Playlisty", searchMode == 1) { if (searchMode != 1) { searchMode = 1; selected.clear(); status = ""; if (query.isNotBlank() && plResults.isEmpty()) runSearch() } }
+                    }
+                    if (searchMode == 1) {
+                        if (status.isNotEmpty()) SubText(status, Modifier.padding(bottom = 6.dp))
+                        if (plResults.isEmpty()) {
+                            if (status.isEmpty()) SubText("Wpisz nazwę (np. „disco polo hity”) albo wklej link do playlisty z YouTube.")
+                            Spacer(Modifier.weight(1f))
+                        } else {
+                            LazyColumn(modifier = sheet.weight(1f)) {
+                                items(plResults) { h ->
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Row(
+                                            Modifier.fillMaxWidth().clickable { openPlaylist(h) }.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Thumb(h.thumb, 46.dp)
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(h.name, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, color = cs.onSurface)
+                                                val sub = listOfNotNull(
+                                                    h.by.takeIf { it.isNotBlank() },
+                                                    h.count.takeIf { it > 0 }?.let { "$it utw." }
+                                                ).joinToString("  ·  ")
+                                                if (sub.isNotEmpty()) Text(sub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = cs.onSurfaceVariant)
+                                            }
+                                        }
+                                        Box(Modifier.fillMaxWidth().padding(start = 70.dp).height(1.dp).background(cs.outlineVariant))
+                                    }
+                                }
+                            }
+                        }
+                    } else {
                     if (status.isNotEmpty()) SubText(status, Modifier.padding(bottom = 6.dp))
                     if (selected.isNotEmpty()) {
                         val picked = results.filter { it.id in selected }
@@ -651,6 +820,7 @@ fun YtMusicScreen(onBack: () -> Unit) {
                             }
                         }
                     } else Spacer(Modifier.weight(1f))
+                    }
                 }
 
                 // ── lista playlist ──
@@ -943,6 +1113,27 @@ private fun YtTabChip(text: String, icon: androidx.compose.ui.graphics.vector.Im
         Text(
             text,
             fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) YT_RED else cs.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun YtModeChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(50)
+    Box(
+        Modifier
+            .clip(shape)
+            .background(if (selected) YT_RED.copy(alpha = 0.14f) else Color.Transparent)
+            .border(1.dp, if (selected) YT_RED else cs.outlineVariant, shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            text,
+            fontSize = 13.sp,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
             color = if (selected) YT_RED else cs.onSurfaceVariant
         )
