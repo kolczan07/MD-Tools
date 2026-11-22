@@ -53,6 +53,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // NewPipeExtractor korzysta z java.time i innych API nowszych niż minSdk 24
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
 
@@ -109,6 +111,10 @@ dependencies {
     // Poczta: IMAP + SMTP (JavaMail dla Androida)
     implementation("com.sun.mail:android-mail:1.6.7")
     implementation("com.sun.mail:android-activation:1.6.7")
+
+    // YouTube Music: wyszukiwanie i adresy strumieni audio bez reklam (ta sama biblioteka co w NewPipe)
+    implementation("com.github.TeamNewPipe:NewPipeExtractor:v0.27.1")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     // Updater — HTTP + JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

@@ -120,6 +120,7 @@ class RadioService : MediaSessionService() {
     private fun applyAlbum(p: androidx.media3.common.Player) {
         val txt = OutdoorTemp.lastText ?: return
         val cur = p.currentMediaItem ?: return
+        if (cur.mediaMetadata.artist?.toString() != "MD-Radio") return  // utwory z YT Music mają własne metadane
         if (cur.mediaMetadata.albumTitle?.toString() == txt) return
         p.replaceMediaItem(
             p.currentMediaItemIndex,
@@ -132,13 +133,24 @@ class RadioService : MediaSessionService() {
         // Wiele stacji (m.in. OpenFM) przekierowuje https -> http lub odrzuca domyślny UA ExoPlayera
         val http = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
-            .setUserAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36")
+            .setDefaultRequestProperties(mapOf("User-Agent" to YtNp.userAgentFor("")))
             .setConnectTimeoutMs(15000)
             .setReadTimeoutMs(15000)
         // OpenFM sprawdza Referer/Origin – dokładamy je tylko dla hostów open.fm
         val withHeaders = ResolvingDataSource.Factory(http) { spec ->
             val host = spec.uri.host.orEmpty()
-            if (host.endsWith("open.fm") || host.endsWith("reconv.pl")) {
+            if (spec.uri.scheme == "ytm") {
+                // Utwór z YT Music: adres strumienia wyciągamy dopiero przy odtwarzaniu (wygasa po kilku godzinach)
+                val real = try {
+                    YtNp.streamUrl(spec.uri.schemeSpecificPart.trimStart('/'))
+                } catch (e: java.io.IOException) {
+                    throw e
+                } catch (e: Exception) {
+                    throw java.io.IOException("YT Music: " + (e.message ?: e.javaClass.simpleName), e)
+                }
+                spec.withUri(android.net.Uri.parse(real))
+                    .withAdditionalHeaders(mapOf("User-Agent" to YtNp.userAgentFor(real)))
+            } else if (host.endsWith("open.fm") || host.endsWith("reconv.pl")) {
                 spec.withAdditionalHeaders(mapOf("Referer" to "https://open.fm/", "Origin" to "https://open.fm"))
             } else spec
         }
@@ -555,7 +567,7 @@ fun RadioScreen(onBack: () -> Unit) {
 private val RADIO_AVATAR = listOf(0xFF2563EB, 0xFF0D9488, 0xFFD97706, 0xFFDB2777, 0xFF7C3AED, 0xFF16A34A).map { Color(it) }
 
 /** Logo stacji pobierane z adresu podanego przez radio-browser; trzymane w pamięci i w pamięci podręcznej telefonu. */
-private object LogoCache {
+internal object LogoCache {
     private val mem = android.util.LruCache<String, Bitmap>(80)
     private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 

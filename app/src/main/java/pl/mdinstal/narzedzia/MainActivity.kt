@@ -186,6 +186,8 @@ fun App(openMail: Boolean, onMailOpened: () -> Unit, openTarget: String?, onTarg
             // Ekrany są rozłączne: wyświetlany jest dokładnie jeden naraz.
             when (stack.last()) {
                 Screen.Home -> HomeScreen(onOpen = { go(it) }, onOpenPumps = { pumpsOpen = true })
+                Screen.Music -> MusicHubScreen(onBack = { back() }, onOpen = { go(it) })
+                Screen.YtMusic -> YtMusicScreen(onBack = { back() })
                 Screen.Radio -> RadioScreen(onBack = { back() })
                 Screen.Network -> NetworkScreen(onBack = { back() }, onOpen = { go(it) })
                 Screen.Speedtest -> SpeedtestScreen(onBack = { back() })
