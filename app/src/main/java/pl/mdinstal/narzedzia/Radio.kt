@@ -116,6 +116,94 @@ class RadioService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var lastFetch = 0L
 
+    private var dsFactory: androidx.media3.datasource.DataSource.Factory? = null
+    private var tail: ExoPlayer? = null
+    private var tailId: String? = null
+    private var tailStartedAt = 0L   // 0 = ogon tylko przygotowany, >0 = trwa crossfade
+    private var tailFadeMs = 0L
+    private var crossFailId: String? = null
+
+    private fun releaseTail() {
+        try { tail?.release() } catch (e: Exception) { }
+        tail = null
+        tailId = null
+        tailStartedAt = 0L
+    }
+
+    private fun crossfadeTick(p: ExoPlayer) {
+        val cur = p.currentMediaItem
+        if (cur?.localConfiguration?.uri?.scheme != "ytm") {
+            releaseTail()
+            if (p.volume != 1f) p.volume = 1f
+            return
+        }
+        val t = tail
+        // ogon w trakcie crossfade: wyciszamy go, pilnujemy pauzy, sprzątamy po czasie
+        if (t != null && tailStartedAt > 0L) {
+            val k = ((android.os.SystemClock.elapsedRealtime() - tailStartedAt).toFloat() / tailFadeMs).coerceIn(0f, 1f)
+            t.volume = 1f - k
+            if (!p.playWhenReady && t.isPlaying) t.pause()
+            else if (p.playWhenReady && !t.isPlaying && t.playbackState == Player.STATE_READY && k < 1f) t.play()
+            if (k >= 1f || t.playbackState == Player.STATE_ENDED) releaseTail()
+        } else if (t != null && cur.mediaId != tailId) {
+            releaseTail() // użytkownik przeskoczył utwór, zanim zaczął się crossfade
+        }
+        if (!p.isPlaying) return
+        val dur = p.duration
+        if (dur == C.TIME_UNSET || dur <= 0) return
+        val pos = p.currentPosition
+        val fade = minOf(4000L, dur / 3).coerceAtLeast(1L)
+        val remaining = dur - pos
+        val crossing = tail != null && tailStartedAt > 0L
+
+        // wejście początku utworu (przy crossfade w tempie wyciszania ogona)
+        val fin = (pos.toFloat() / (if (crossing) tailFadeMs else 1500L)).coerceIn(0f, 1f)
+
+        if (p.hasNextMediaItem() && crossFailId != cur.mediaId) {
+            if (tail == null && remaining in (fade + 1)..(fade + 3000)) {
+                // przygotowanie: rozgrzewamy adres następnego utworu i buforujemy ogon bieżącego
+                val nextId = p.getMediaItemAt(p.nextMediaItemIndex).mediaId
+                scope.launch(Dispatchers.IO) { try { YtNp.streamUrl(nextId) } catch (e: Exception) { } }
+                val f = dsFactory
+                if (f != null) {
+                    val ex = ExoPlayer.Builder(this)
+                        .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(f))
+                        .setAudioAttributes(
+                            AudioAttributes.Builder().setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).setUsage(C.USAGE_MEDIA).build(),
+                            false // fokus audio zostaje przy głównym odtwarzaczu
+                        )
+                        .build()
+                    ex.setMediaItem(MediaItem.Builder().setUri("ytm://" + cur.mediaId).build())
+                    ex.seekTo((dur - fade).coerceAtLeast(0L))
+                    ex.volume = 1f
+                    ex.playWhenReady = false
+                    ex.prepare()
+                    tail = ex
+                    tailId = cur.mediaId
+                    tailStartedAt = 0L
+                }
+            }
+            val tt = tail
+            if (tt != null && tailStartedAt == 0L && remaining <= fade) {
+                if (tt.playbackState == Player.STATE_READY) {
+                    tailFadeMs = remaining.coerceAtLeast(500L)
+                    tailStartedAt = android.os.SystemClock.elapsedRealtime()
+                    tt.volume = 1f
+                    tt.play()
+                    p.volume = 0f
+                    p.seekToNextMediaItem()
+                    return
+                } else if (remaining < fade / 2) {
+                    crossFailId = cur.mediaId // ogon nie zdążył się zbuforować: zwykłe wyciszenie
+                    releaseTail()
+                }
+            }
+        }
+
+        val fout = if (p.hasNextMediaItem() && crossFailId == cur.mediaId) (remaining.toFloat() / fade).coerceIn(0f, 1f) else 1f
+        p.volume = minOf(fin, fout)
+    }
+
     /** Wpisuje temperaturę zewnętrzną w pole album bieżącej stacji (trzecia linia w radiu samochodowym). */
     private fun applyAlbum(p: androidx.media3.common.Player) {
         val txt = OutdoorTemp.lastText ?: return
@@ -174,22 +262,14 @@ class RadioService : MediaSessionService() {
             }
         })
 
-        // Płynne przejścia między utworami z playlisty YT Music: wyciszanie końcówki i wejście początku (radio bez zmian)
+        // Crossfade między utworami z playlisty YT Music (radio bez zmian).
+        // Główny odtwarzacz trzyma kolejkę i sesję. Tuż przed końcem utworu drugi, tymczasowy odtwarzacz ("ogon")
+        // dogrywa końcówkę poprzedniego utworu i się wycisza, a główny od razu przechodzi do następnego i się podgłaśnia.
+        dsFactory = withHeaders
         scope.launch {
             while (isActive) {
                 delay(100)
-                try {
-                    val isYt = player.currentMediaItem?.localConfiguration?.uri?.scheme == "ytm"
-                    if (!isYt) { if (player.volume != 1f) player.volume = 1f; continue }
-                    if (!player.isPlaying) continue
-                    val dur = player.duration
-                    if (dur == C.TIME_UNSET || dur <= 0) continue
-                    val fade = minOf(3000L, dur / 4).coerceAtLeast(1L)
-                    val pos = player.currentPosition
-                    val fin = (pos.toFloat() / fade).coerceIn(0f, 1f)
-                    val fout = if (player.hasNextMediaItem()) ((dur - pos).toFloat() / fade).coerceIn(0f, 1f) else 1f
-                    player.volume = minOf(fin, fout)
-                } catch (e: Exception) { }
+                try { crossfadeTick(player) } catch (e: Exception) { releaseTail() }
             }
         }
 
@@ -218,6 +298,7 @@ class RadioService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        releaseTail()
         scope.cancel()
         session?.let {
             it.player.release()
