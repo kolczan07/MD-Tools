@@ -13,6 +13,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -358,8 +359,10 @@ fun YtMusicScreen(onBack: () -> Unit) {
     var openList by remember { mutableStateOf<String?>(null) }
 
     // dialogi
-    var addTarget by remember { mutableStateOf<Track?>(null) }
-    var newListFor by remember { mutableStateOf<Track?>(null) }
+    var addTargets by remember { mutableStateOf<List<Track>>(emptyList()) }
+    var newListFor by remember { mutableStateOf<List<Track>>(emptyList()) }
+    // zaznaczanie wielu utworów w wyszukiwarce (długie przytrzymanie wiersza)
+    val selected = remember { mutableStateListOf<String>() }
     var newListOpen by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
     var deleteList by remember { mutableStateOf<Playlist?>(null) }
@@ -385,6 +388,8 @@ fun YtMusicScreen(onBack: () -> Unit) {
         lists[i] = p.copy(tracks = p.tracks + t)
         persist()
     }
+
+    fun addAllToList(listId: String, ts: List<Track>) { ts.forEach { addToList(listId, it) } }
 
     fun createList(name: String): Playlist {
         val p = Playlist(UUID.randomUUID().toString(), name.trim(), emptyList())
@@ -467,6 +472,20 @@ fun YtMusicScreen(onBack: () -> Unit) {
         c.play()
     }
 
+    /** Dodaje utwory na koniec bieżącej kolejki; gdy nic z YT Music nie gra, zaczyna je odtwarzać. */
+    fun enqueue(tracks: List<Track>) {
+        val c = controller ?: return
+        if (tracks.isEmpty()) return
+        val ytActive = c.mediaItemCount > 0 && c.currentMediaItem?.localConfiguration?.uri?.scheme == "ytm" &&
+            c.playbackState != Player.STATE_IDLE && c.playbackState != Player.STATE_ENDED
+        if (!ytActive) {
+            playQueue(tracks, 0)
+        } else {
+            c.addMediaItems(tracks.map { it.toMediaItem() })
+            android.widget.Toast.makeText(ctx, "Dodano do kolejki: ${tracks.size}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun togglePlay() {
         val c = controller ?: return
         if (c.isPlaying) c.pause() else {
@@ -490,6 +509,7 @@ fun YtMusicScreen(onBack: () -> Unit) {
 
     // „wstecz” z widoku playlisty wraca do listy playlist, nie wychodzi z ekranu
     androidx.activity.compose.BackHandler(enabled = currentList != null) { openList = null }
+    androidx.activity.compose.BackHandler(enabled = selected.isNotEmpty()) { selected.clear() }
 
     AppScaffold(
         if (currentList != null) currentList.name else "YT Music",
@@ -592,6 +612,24 @@ fun YtMusicScreen(onBack: () -> Unit) {
                         onSearch = { runSearch() }
                     )
                     if (status.isNotEmpty()) SubText(status, Modifier.padding(bottom = 6.dp))
+                    if (selected.isNotEmpty()) {
+                        val picked = results.filter { it.id in selected }
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(YT_RED.copy(alpha = 0.12f))
+                                .padding(start = 12.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Zaznaczono: ${selected.size}", fontWeight = FontWeight.SemiBold, fontSize = 14.sp, color = cs.onSurface, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { selected.clear(); selected.addAll(results.map { it.id }) }) { Text("Wszystkie", fontSize = 13.sp) }
+                            TextButton(onClick = { enqueue(picked); selected.clear() }) { Text("Do kolejki", fontSize = 13.sp) }
+                            TextButton(onClick = { addTargets = picked }) { Text("Do playlisty", fontSize = 13.sp) }
+                            IconButton(onClick = { selected.clear() }) { Icon(Icons.Filled.Close, contentDescription = "Anuluj zaznaczenie", tint = cs.onSurfaceVariant) }
+                        }
+                    }
                     if (results.isNotEmpty()) {
                         LazyColumn(modifier = sheet.weight(1f)) {
                             items(results.size) { i ->
@@ -599,10 +637,16 @@ fun YtMusicScreen(onBack: () -> Unit) {
                                 TrackRow(
                                     t,
                                     current = nowId == t.id,
-                                    onPlay = { playQueue(results, i) },
+                                    onPlay = {
+                                        if (selected.isNotEmpty()) { if (t.id in selected) selected.remove(t.id) else selected.add(t.id) }
+                                        else playQueue(results, i)
+                                    },
                                     actionIcon = Icons.Filled.Add,
                                     actionDesc = "Dodaj do playlisty",
-                                    onAction = { addTarget = t }
+                                    onAction = { addTargets = listOf(t) },
+                                    selectMode = selected.isNotEmpty(),
+                                    isSelected = t.id in selected,
+                                    onLongPress = { if (t.id !in selected) selected.add(t.id) }
                                 )
                             }
                         }
@@ -616,7 +660,7 @@ fun YtMusicScreen(onBack: () -> Unit) {
                             .padding(bottom = 8.dp)
                             .clip(RoundedCornerShape(50))
                             .background(cs.primary.copy(alpha = 0.14f))
-                            .clickable { newListFor = null; newListName = ""; newListOpen = true }
+                            .clickable { newListFor = emptyList(); newListName = ""; newListOpen = true }
                             .padding(horizontal = 14.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -719,31 +763,35 @@ fun YtMusicScreen(onBack: () -> Unit) {
         }
     }
 
-    // ── dialog: wybór playlisty dla utworu ──
-    addTarget?.let { t ->
+    // ── dialog: wybór playlisty dla jednego lub wielu utworów ──
+    if (addTargets.isNotEmpty()) {
+        val ts = addTargets
         AlertDialog(
-            onDismissRequest = { addTarget = null },
+            onDismissRequest = { addTargets = emptyList() },
             title = { Text("Dodaj do playlisty") },
             text = {
                 Column {
-                    Text(t.title, fontSize = 13.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        if (ts.size == 1) ts[0].title else "Wybrane utwory: ${ts.size}",
+                        fontSize = 13.sp, color = cs.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
                     Spacer(Modifier.height(8.dp))
                     lists.toList().forEach { p ->
                         Text(
-                            p.name + if (p.tracks.any { it.id == t.id }) "  ✓" else "",
-                            modifier = Modifier.fillMaxWidth().clickable { addToList(p.id, t); addTarget = null }.padding(vertical = 10.dp),
+                            p.name + if (ts.all { x -> p.tracks.any { it.id == x.id } }) "  ✓" else "",
+                            modifier = Modifier.fillMaxWidth().clickable { addAllToList(p.id, ts); addTargets = emptyList(); selected.clear() }.padding(vertical = 10.dp),
                             fontSize = 15.sp, color = cs.onSurface
                         )
                     }
                     Text(
                         "+ Nowa playlista",
-                        modifier = Modifier.fillMaxWidth().clickable { newListFor = t; newListName = ""; newListOpen = true; addTarget = null }.padding(vertical = 10.dp),
+                        modifier = Modifier.fillMaxWidth().clickable { newListFor = ts; newListName = ""; newListOpen = true; addTargets = emptyList() }.padding(vertical = 10.dp),
                         fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = cs.primary
                     )
                 }
             },
             confirmButton = {},
-            dismissButton = { TextButton(onClick = { addTarget = null }) { Text("Anuluj") } }
+            dismissButton = { TextButton(onClick = { addTargets = emptyList() }) { Text("Anuluj") } }
         )
     }
 
@@ -765,8 +813,9 @@ fun YtMusicScreen(onBack: () -> Unit) {
                     enabled = newListName.isNotBlank(),
                     onClick = {
                         val p = createList(newListName)
-                        newListFor?.let { addToList(p.id, it) }
-                        newListFor = null
+                        addAllToList(p.id, newListFor)
+                        if (newListFor.isNotEmpty()) selected.clear()
+                        newListFor = emptyList()
                         newListOpen = false
                         tab = YtTab.PLAYLISTS
                     }
@@ -832,6 +881,7 @@ private fun Thumb(url: String, size: Dp) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun TrackRow(
     t: Track,
@@ -839,18 +889,29 @@ private fun TrackRow(
     onPlay: () -> Unit,
     actionIcon: androidx.compose.ui.graphics.vector.ImageVector,
     actionDesc: String,
-    onAction: () -> Unit
+    onAction: () -> Unit,
+    selectMode: Boolean = false,
+    isSelected: Boolean = false,
+    onLongPress: (() -> Unit)? = null
 ) {
     val cs = MaterialTheme.colorScheme
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(if (current) YT_RED.copy(alpha = 0.10f) else Color.Transparent)
-                .clickable { onPlay() }
+                .background(if (isSelected) YT_RED.copy(alpha = 0.18f) else if (current) YT_RED.copy(alpha = 0.10f) else Color.Transparent)
+                .combinedClickable(onClick = onPlay, onLongClick = onLongPress)
                 .padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (selectMode) {
+                androidx.compose.material3.Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = null,
+                    colors = androidx.compose.material3.CheckboxDefaults.colors(checkedColor = YT_RED)
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             Thumb(t.thumb, 46.dp)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -858,7 +919,7 @@ private fun TrackRow(
                 val dur = if (t.durationSec > 0) "  ·  %d:%02d".format(t.durationSec / 60, t.durationSec % 60) else ""
                 Text(t.artist + dur, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (current) YT_RED else cs.onSurfaceVariant)
             }
-            IconButton(onClick = onAction) {
+            if (selectMode) Spacer(Modifier.width(12.dp)) else IconButton(onClick = onAction) {
                 Icon(actionIcon, contentDescription = actionDesc, tint = cs.onSurfaceVariant)
             }
         }
